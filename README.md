@@ -1,2 +1,2 @@
 # Industrial_Capitalist
-Software Engineering Major
+My Software Engineering major project "Industrial Capitalist" is a comprehensive factory automation game built in Python using the Arcade library. Players build and expand industrial production chains, starting from basic resource extraction like coal mining and advance to complex manufacturing operations while managing a evergrowing pollution crisis to become the ultimate Capitalist.
