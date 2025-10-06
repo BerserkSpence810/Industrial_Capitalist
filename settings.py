@@ -11,7 +11,6 @@ COL = 25
 #Basics
 SCREEN_WIDTH = GRID_WIDTH * TILE_SIZE + 200
 SCREEN_HEIGHT = GRID_HEIGHT * TILE_SIZE
-SCREEN_HEIGHT = 600
 TITLE = "Industrial Capitalist"
 FPS = 60
 screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
