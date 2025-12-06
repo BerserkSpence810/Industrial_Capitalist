@@ -137,6 +137,25 @@ def update_world(grid, dt, money):
     return money
 
 pygame.init()
+
+#Image loading
+try:
+    MACHINE_IMAGES[2] = pygame.transform.scale(
+        pygame.image.load("assets/CoalDrill.png").convert_alpha(), 
+        (TILE_SIZE, TILE_SIZE)
+    )
+    MACHINE_IMAGES[1] = pygame.transform.scale(
+        pygame.image.load("assets/Pipe.png").convert_alpha(), 
+        (TILE_SIZE, TILE_SIZE)
+    )
+    MACHINE_IMAGES[3] = pygame.transform.scale(
+        pygame.image.load("assets/VanDepot.png").convert_alpha(), 
+        (TILE_SIZE, TILE_SIZE)
+    )
+except pygame.error as e:
+    print(f"Warning: Could not load images: {e}")
+    print("Using colored rectangles instead.")
+
 grid = load_grid()
 money = load_money()
 run = True
@@ -180,26 +199,82 @@ while run:
                         gy = int(world_y // TILE_SIZE)
                         
                         if 0 <= gx < GRID_WIDTH and 0 <= gy < GRID_HEIGHT:
-                            # Shift + click to inspect tile
-                            if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                            shift_held = pygame.key.get_mods() & pygame.KMOD_SHIFT
+                            
+                            #Get active
+                            tool_to_place = ui.get_active_tool()
+                            current_tile_type = grid[gy][gx]["type"]
+                            
+                            #No tool check
+                            if tool_to_place == -1:
                                 ui.handle_tile_click(grid, gx, gy)
+                            
+                            #Deletion handle
+                            elif tool_to_place == 0:
+                                if current_tile_type != 0:  #Check
+                                    machine_cost = MACHINE_STATS.get(current_tile_type, {}).get("cost", 0)
+                                    
+                                    #Money check
+                                    if money >= machine_cost:
+                                        #selling
+                                        sell_value = machine_cost * 0.8
+                                        money += sell_value
+                                        ui.show_transaction_message(f"+${sell_value:.2f} (Sold)", (100, 255, 100))
+                                        
+                                        #Clearing Handle
+                                        grid[gy][gx]["type"] = 0
+                                        grid[gy][gx]["stored"] = None
+                                        grid[gy][gx]["amount"] = 0
+                                        grid[gy][gx]["timer"] = 0
+                                        if 'output_timer' in grid[gy][gx]:
+                                            del grid[gy][gx]['output_timer']
+                                        if 'total_sold' in grid[gy][gx]:
+                                            del grid[gy][gx]['total_sold']
+                                        
+                                        #Update
+                                        if ui.selected_tile and ui.selected_tile[1] == gx and ui.selected_tile[2] == gy:
+                                            ui.selected_tile = None
+                                        
+                                        #Shift check
+                                        if not shift_held:
+                                            ui.active_tool = -1
+                                    else:
+                                        ui.show_transaction_message("Not enough money!", (255, 50, 50))
+                            
+                            #Placement handle
                             else:
-                                # Normal click to place tile
-                                grid[gy][gx]["type"] = ui.get_active_tool()
-                                grid[gy][gx]["stored"] = None
-                                grid[gy][gx]["amount"] = 0
-                                grid[gy][gx]["timer"] = 0
-                                if 'output_timer' in grid[gy][gx]:
-                                    del grid[gy][gx]['output_timer']
-                                if 'total_sold' in grid[gy][gx]:
-                                    del grid[gy][gx]['total_sold']
-                                if ui.get_active_tool() == 3:
-                                    grid[gy][gx]['total_sold'] = 0
-                                if ui.selected_tile and ui.selected_tile[1] == gx and ui.selected_tile[2] == gy:
-                                    ui.handle_tile_click(grid, gx, gy)
+                                machine_cost = MACHINE_STATS.get(tool_to_place, {}).get("cost", 0)
+                                
+                                if money >= machine_cost:
+                                    if current_tile_type != 0:
+                                        sell_value = MACHINE_STATS.get(current_tile_type, {}).get("cost", 0) * 0.8
+                                        money += sell_value
+                                    
+                                    money -= machine_cost
+                                    ui.show_transaction_message(f"-${machine_cost:.2f}", (255, 100, 100))
+                                    
+                                    grid[gy][gx]["type"] = tool_to_place
+                                    grid[gy][gx]["stored"] = None
+                                    grid[gy][gx]["amount"] = 0
+                                    grid[gy][gx]["timer"] = 0
+                                    if 'output_timer' in grid[gy][gx]:
+                                        del grid[gy][gx]['output_timer']
+                                    if 'total_sold' in grid[gy][gx]:
+                                        del grid[gy][gx]['total_sold']
+                                    if tool_to_place == 3:
+                                        grid[gy][gx]['total_sold'] = 0
+                                    
+                                    if ui.selected_tile and ui.selected_tile[1] == gx and ui.selected_tile[2] == gy:
+                                        ui.handle_tile_click(grid, gx, gy)
+                                    
+                                    if not shift_held:
+                                        ui.active_tool = -1
+                                else:
+                                    ui.show_transaction_message("Not enough money!", (255, 50, 50))
                 else:
                     ui.handle_click((mx, my))
-            elif event.button == 3:
+            
+            elif event.button == 3: #Inspect
                 if mx < play_area_width:
                     world_x = (mx - camera_x) / zoom
                     world_y = (my - camera_y) / zoom
@@ -210,7 +285,7 @@ while run:
                         if 0 <= gx < GRID_WIDTH and 0 <= gy < GRID_HEIGHT:
                             ui.handle_tile_click(grid, gx, gy)
             
-            elif event.button == 4:
+            elif event.button == 4: #Left/Right
                 if mx < play_area_width:
                     old_zoom = zoom
                     zoom = min(zoom + 0.1, max_zoom)
@@ -218,7 +293,7 @@ while run:
                     camera_x = mx - (mx - camera_x) * zoom_factor
                     camera_y = my - (my - camera_y) * zoom_factor
             
-            elif event.button == 5:
+            elif event.button == 5:  #Down/Up
                 if mx < play_area_width:
                     old_zoom = zoom
                     zoom = max(zoom - 0.1, min_zoom)
@@ -262,14 +337,20 @@ while run:
     play_area_rect = pygame.Rect(0, 0, play_area_width, SCREEN_HEIGHT)
     pygame.draw.rect(screen, (30, 30, 30), play_area_rect)
     world_surface = pygame.Surface((grid_pixel_width, grid_pixel_height))
-    world_surface.fill(BGC)
+    world_surface.fill((34, 139, 34))  #Background
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
             tile = grid[y][x]
             TILE_VALUE = tile["type"]
-            colour = MACHINE_TYPES.get(TILE_VALUE, CEMPTY)
             rect = pygame.Rect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE)
-            pygame.draw.rect(world_surface, colour, rect)
+            
+            #check
+            if TILE_VALUE != 0:
+                if TILE_VALUE in MACHINE_IMAGES:
+                    world_surface.blit(MACHINE_IMAGES[TILE_VALUE], (x * TILE_SIZE, y * TILE_SIZE))
+                else:
+                    colour = MACHINE_TYPES.get(TILE_VALUE, CEMPTY)
+                    pygame.draw.rect(world_surface, colour, rect)
     for x in range(GRID_WIDTH + 1):
         pygame.draw.line(world_surface, (70, 70, 70), (x * TILE_SIZE, 0), (x * TILE_SIZE, grid_pixel_height), 1)
     for y in range(GRID_HEIGHT + 1):

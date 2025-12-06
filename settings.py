@@ -37,8 +37,6 @@ CCDRILL = (100, 60, 20)
 CDEPOT = (20, 150, 20)
 CDELETE = CEMPTY
 
-coal_drill = pygame.image.load("assets/CoalDrill.png").convert_alpha()
-
 MACHINE_TYPES = {
     0: CEMPTY,
     1: CPIPE,
@@ -47,10 +45,13 @@ MACHINE_TYPES = {
     4: CDELETE
 }
 
+MACHINE_IMAGES = {}
+
 MACHINE_STATS = {
-    1: {"name": "Pipe", "capacity": 10, "type": "pipe"},
-    2: {"name": "Coal Drill", "rate": 1.0, "type": "drill", "output_dir": DOWN},
-    3: {"name": "Van Depot", "capacity": 20, "type": "depot", "input_dir": UP}
+    0: {"name": "Empty", "type": "empty", "cost": 0},
+    1: {"name": "Pipe", "capacity": 10, "type": "pipe", "cost": 10},
+    2: {"name": "Coal Drill", "rate": 1.0, "type": "drill", "output_dir": DOWN, "cost": 50},
+    3: {"name": "Van Depot", "capacity": 20, "type": "depot", "input_dir": UP, "cost": 100}
 }
 
 ITEM_VALUES = {
