@@ -1632,7 +1632,7 @@ class DrawGrid:
             if overflow:
                 ov_s=self.tiny_font.render(f"+{len(inputs_all)-max_inputs}",True,(150,160,185)); screen.blit(ov_s,(rx+2,ry_center-5)); rx+=18
             rx+=2; time_s=rec["time"]; power_w=rec["power"]
-            pstr=f"{power_w/1000:.0f}kMF" if power_w>=1000 else f"{power_w}MF"
+            pstr=f"{power_w/1000:.0f}kME" if power_w>=1000 else f"{power_w}ME"
             time_txt=self.tiny_font.render(f"{time_s:.0f}s",True,(220,230,250))
             pow_txt=self.tiny_font.render(pstr,True,(140,155,185))
             tw=max(time_txt.get_width(),pow_txt.get_width()); arr_x_start=rx; arr_x_end=rx+tw+10
