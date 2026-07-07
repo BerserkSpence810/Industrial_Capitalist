@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"name": "Industrial-Capitalist",
+			"path": "."
+		},
+		{
+			"name": "SFX",
+			"path": "../../SFX"
+		}
+	],
+	"settings": {
+		"python-envs.defaultEnvManager": "ms-python.python:system",
+		"python-envs.defaultPackageManager": "ms-python.python:pip"
+	}
+}

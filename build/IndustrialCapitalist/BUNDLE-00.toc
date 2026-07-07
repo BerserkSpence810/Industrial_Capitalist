@@ -1,0 +1,3 @@
+([('IndustrialCapitalist',
+   '/Users/ryan.connoley/Desktop/Software_Eng/Industrial-Capitalist/dist/IndustrialCapitalist',
+   'EXECUTABLE')],)
