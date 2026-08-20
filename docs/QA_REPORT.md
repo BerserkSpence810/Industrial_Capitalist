@@ -1,5 +1,7 @@
 # Industrial Capitalist - QA Report
 
+##ALL QA TESTING SAID HERE IS A GENERATED REPORT FROM CLAUDE CODE NOT ACTUAL TESTERS, TAKE WITH GRAIN OF SALT I ONLY REALLY USED FOR IMAGE STORAGE FOR TUTORIAL
+
 **Method.** The game was played, not read. A harness (`qa/harness.py`) runs the
 real `main.py` game loop with pygame's input functions redirected to a scripted
 player: every click and keystroke goes through the game's own event handling,
