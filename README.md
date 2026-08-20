@@ -15,7 +15,7 @@ python3 main.py
 | --- | --- |
 | [`docs/MANUAL.md`](docs/MANUAL.md) | Full user manual - installation, controls, production, power, research, blueprints, pollution, troubleshooting, and a reference table for every machine |
 | [`tutorial/README.md`](tutorial/README.md) | Ratio-perfect reference layouts with screenshots and ready-to-paste blueprint strings |
-| [`docs/QA_REPORT.md`](docs/QA_REPORT.md) | QA report from the end-to-end play-test pass: bugs found, root causes, fixes and balance changes |
+| [`docs/QA_REPORT.md`](docs/QA_REPORT.md) | Was done by claude code take lighlty but is a rough QA report from the end-to-end play-test pass: bugs found, root causes, fixes and balance changes |
 
 ## Tests
 
