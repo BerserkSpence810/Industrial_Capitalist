@@ -570,7 +570,7 @@ cleaner. A one-line hint below tells you what to do next.
 
 ---
 
-## 10. Money, contracts, loans and the market
+## 10. Money, contracts, loans and the market (WIP STILL USE AT OWN RISK)
 
 * **Depots** are the only way to turn goods into money. Each has a capacity, a
   sell threshold and a bonus multiplier - a Van Depot sells once it is half full
