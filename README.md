@@ -17,16 +17,6 @@ python3 main.py
 | [`tutorial/README.md`](tutorial/README.md) | Ratio-perfect reference layouts with screenshots and ready-to-paste blueprint strings |
 | [`docs/QA_REPORT.md`](docs/QA_REPORT.md) | Was done by claude code take lighlty but is a rough QA report from the end-to-end play-test pass: bugs found, root causes, fixes and balance changes |
 
-## Tests
-
-```bash
-python3 tests/test_regressions.py   # data and logic invariants (fast, no display)
-python3 tests/test_integration.py   # boots the real game headless and drives it
-```
-
-`tests/support/` holds the harness the integration tests run on: it executes
-`main.py` with pygame's input redirected to a scripted player, so the tests click
-real buttons, read real frames, and exercise the real simulation.
 
 ## Blueprint strings
 
