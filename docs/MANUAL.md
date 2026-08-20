@@ -30,7 +30,7 @@ more valuable things, and living with the smoke.*
 
 | | |
 |---|---|
-| **Operating system** | Windows, macOS or Linux |
+| **Operating system** | Windows, macOS|
 | **Python** | 3.10 or newer (developed and tested on 3.12) |
 | **Display** | 1280 x 720 or larger - the game renders at a fixed 1280 x 720 |
 | **Disk** | ~60 MB for the game and its art |
@@ -59,14 +59,14 @@ A window titled *Industrial Capitalist* opens at 1280 x 720.
 
 ### First launch
 
-1. A boot sequence types itself out on a terminal-style screen. Press any key to skip it.
+1. A boot sequence types itself out on a terminal-style screen. Press any key to skip it if wanted but may bug audio a little bit.
 2. You land on the main menu, which is a fake shell prompt. **Type `play` and press Enter.**
    (`p`, `1`, `start` and `new` also work; `quit`, `q`, `2` or `exit` leave the game.)
 3. A loading screen runs, then the **save slot** list appears. There are three slots.
    Move with the arrow keys or W/S and press Enter, or click a slot's **PLAY** button.
 4. Choosing an empty slot asks you to register a company name (1-22 characters),
    plays a short story intro (Esc skips it), and drops you into a brand new world
-   with **$1,500** and an empty 40 x 40 plot.
+   with **$1,500** and an empty plot.
 5. A 15-step tutorial panel appears in the top right. Click **NEXT** to page
    through it or **SKIP** to dismiss it.
 
