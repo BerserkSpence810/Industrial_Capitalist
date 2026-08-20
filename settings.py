@@ -1,5 +1,9 @@
 import pygame
 
+# one place. last time this was in 4 different strings and 4 of them still said BETA
+GAME_VERSION = "6.0"
+GAME_BUILD   = "1024A"
+
 TILE_SIZE = 32
 
 GRID_WIDTH = 40
@@ -243,11 +247,11 @@ MACHINE_STATS = {
     113: {"name": "XOR Gate", "type": "logic","category": "logic","cost": 850},
     22:  {"name": "Item Silo",               "type": "storage","category": "storage","cost": 800,  "size": (2,2),"capacity": 500,  "input_dir": UP,"output_dir": DOWN},
     23:  {"name": "Fluid Silo",              "type": "storage","category": "storage","cost": 1000, "size": (2,2),"capacity": 100,  "input_dir": UP,"output_dir": DOWN},
-    13:  {"name": "Research Station 1","type": "research","cost": 75,   "size": (2,2), "power_input": 2100,  "power_transfer": 3000,  "power_capacity": 3000,   "power_range": 6, "rp_formula": "sqrt_n"},
-    114: {"name": "Research Station 2","type": "research","cost": 7500, "size": (8,8), "power_input": 8000,  "power_transfer": 15000, "power_capacity": 20000,  "power_range": 6, "rp_formula": "rs2_item","item_cycle_time": 2.0, "rp_per_item": 10.0},
-    115: {"name": "Research Station 3","type": "research","cost": 250000,"size": (8,8), "power_input": 20000, "power_transfer": 40000, "power_capacity": 80000,  "power_range": 8, "rp_formula": "rs3_dual","item_cycle_time": 0.5, "rp_per_item": 25.0},
-    21:  {"name": "Scrubber",     "type": "scrubber","category": "scrubber","cost": 1500,"size": (2,2),"power_input": 5000,"power_transfer": 10000,"power_capacity": 50000,"scrub_rate": 0.005},
-    110: {"name": "Exhaust Stack","type": "utility","category": "utility","cost": 2000,"size": (2,3),"power_input": 0,"power_capacity": 0,"base_pollution_rate": 0.001},
+    13:  {"name": "Research Station 1","type": "research","cost": 75,   "size": (2,2), "power_input": 900,   "power_transfer": 3000,  "power_capacity": 3000,   "power_range": 6, "rp_formula": "sqrt_n"},
+    114: {"name": "Research Station 2","type": "research","cost": 7500, "size": (4,4), "power_input": 8000,  "power_transfer": 15000, "power_capacity": 20000,  "power_range": 6, "rp_formula": "rs2_item","item_cycle_time": 2.0, "rp_per_item": 10.0},
+    115: {"name": "Research Station 3","type": "research","cost": 250000,"size": (5,5), "power_input": 20000, "power_transfer": 40000, "power_capacity": 80000,  "power_range": 8, "rp_formula": "rs3_dual","item_cycle_time": 0.5, "rp_per_item": 25.0},
+    21:  {"name": "Scrubber",     "type": "scrubber","category": "scrubber","cost": 1500,"size": (2,2),"power_input": 5000,"power_transfer": 10000,"power_capacity": 50000,"scrub_rate": 0.008,"residue_rate": 0.125},
+    110: {"name": "Exhaust Stack","type": "utility","category": "utility","cost": 900, "size": (2,3),"power_input": 0,"power_capacity": 0,"base_pollution_rate": 0.001},
     109: {"name": "Electric Furnace","type": "processor","category": "furnace","cost": 1200,  "size": (2,2),"power_input": 24000,"power_transfer": 40000,"power_capacity": 150000},
     9:   {"name": "Furnace",         "type": "processor","category": "furnace","cost": 400,  "size": (1,1),"input_dirs": [UP, LEFT],"output_dir": DOWN,"capacity": 8,"coal_capacity": 10,"power_input": 500,"power_transfer": 1500,"power_capacity": 5000},
     10:  {"name": "Ingot Molder",    "type": "processor",                      "cost": 1500, "size": (1,1),"input_dir": UP,"output_dir": DOWN,"power_input": 1500,"power_transfer": 4000,"power_capacity": 15000},
@@ -255,7 +259,7 @@ MACHINE_STATS = {
     57:  {"name": "Industrial Electric Furnace","type": "processor","category": "processor","cost": 120000,"size": (3,3),"power_input": 200000,"power_transfer": 400000,"power_capacity": 1000000},
     78:  {"name": "Foundry",         "type": "processor","category": "processor","cost": 500000,"size": (6,6),"power_input": 50000,"power_transfer": 100000,"power_capacity": 500000},
     116: {"name": "Industrial Firebox","type": "processor","category": "processor","cost": 3500,"size": (2,3),"power_input": 0,"power_transfer": 5000,"power_capacity": 10000},
-    18:  {"name": "Sawmill",         "type": "processor",                      "cost": 3000,  "size": (2,3),"power_input": 3000,"power_transfer": 10000,"power_capacity": 30000},
+    18:  {"name": "Sawmill", "type": "processor",                      "cost": 3000,  "size": (2,3),"power_input": 3000,"power_transfer": 10000,"power_capacity": 30000},
     19:  {"name": "Press",           "type": "processor",                      "cost": 2500,  "size": (2,2),"power_input": 6250,"power_transfer": 15000,"power_capacity": 250000},
     20:  {"name": "Roller",          "type": "processor",                      "cost": 2500,  "size": (2,2),"power_input": 1125,"power_transfer": 3000,"power_capacity": 250000},
     33:  {"name": "Grinder",         "type": "processor","category": "processor","cost": 800,  "size": (2,2),"power_input": 4000, "power_transfer": 10000,"power_capacity": 30000},
@@ -299,7 +303,7 @@ ITEM_VALUES = {
     "iron_plate": 80.0, "iron_plate2": 340.0, "iron_coil": 55.0,
     "cut_oak_log": 3.50, "chunk_plank": 4.50, "planks": 8.00, "plank2": 18.00,
     "nails": 5.00, "chair": 1029.50,
-    "steel": 48.72, "steel_plate": 65.0, "steel_rod": 72.0, "gear": 85.0,
+    "steel": 50.0, "steel_plate": 65.0, "steel_rod": 72.0, "gear": 85.0,
     "steel_coil": 130.0, "crankshaft": 758.00, "gearbox": 2552.00, "galvanized_steel": 240.0,
     "liquid_copper": 7.54, "copper_ingot": 16.00, "copper_powder": 3.50,
     "copper_mix": 10.00, "copper_plate": 38.0, "copper_wire": 9.0, "insulated_wire": 32.0,
@@ -512,7 +516,7 @@ DIESEL_GEN_OUTPUT = {
     "refined_diesel": 90000,
 }
 
-# ── CHECK FUNCTIONS ────────────────────────────────────────────────────────────
+# -- CHECK FUNCTIONS --------
 def _furnace_check(t):
     return (t.get("coal_buffer", 0) > 0 and t.get("input_buffer", 0) > 0 and (t.get("input_item") or "").startswith("raw_"))
 
@@ -575,7 +579,6 @@ def _plasticref_check(t):
     return (t.get("input_buffer", 0) >= 1 and (t.get("input_item") or "") == "crude_oil"
             and t.get("water_buffer", 0) >= 0.5)
 
-def _oxidation_check(t):   return t.get("input_buffer", 0) >= 1
 def _plasticfac_check(t):  return t.get("input_buffer", 0) >= 1 and t.get("input2_buffer", 0) >= 1
 def _plasticmold_check(t): return t.get("input_buffer", 0) >= 10 and (t.get("input_item") or "") == "plastic_pellets"
 def _gasburner_check(t):   return t.get("input_buffer", 0) >= 0.5
@@ -641,18 +644,44 @@ MACHINE_DEFS = {
     45: {"fluid_producer": True, "resource": "raw_gas",     "rate": 0.15, "push_amount": 0.45, "cap": 10.0,  "output_subtile": (1,1), "push_dir": (0,1)},
     70: {"fluid_producer": True, "resource": "lithium_brine","rate": 0.3, "push_amount": 0.45, "cap": 12.0,  "output_subtile": (1,2), "push_dir": (0,1)},
     90: {"fluid_producer": True, "resource": "oxygen",      "rate": 0.4,  "push_amount": 0.45, "cap": 15.0,  "output_subtile": (1,2), "push_dir": (0,1)},
-    # Special / non-process machines
-    17: {"diesel_gen": True},
-    21: {"scrubber": True},
-    22: {"silo": True, "fluid": False},
-    23: {"silo": True, "fluid": True},
+    # Special / non-process machines.
+    # NOTE: silo/diesel-gen receive+push logic lives in main.py (custom
+    # branches in push_item_to_neighbor / update_world). The port entries
+    # here are the single source of truth for WHERE those ports sit, and are
+    # what the placement preview, zone overlay and can_connect read - keep
+    # them in sync with the custom logic.
+    17: {"diesel_gen": True,
+         "input_ports": [{"items": ["poor_quality_diesel", "diesel", "refined_diesel"],
+                          "buf": "fuel_buffer", "item_buf": "fuel_item",
+                          "subtile": (0, 0), "from_dir": (0, 1), "cap": 10.0}]},
+    # scrubber CATCHES the muck so the muck has to go somewhere
+    # fills w/ residue -> full buffer -> stops dead. liquid burner under it
+    # (can sell it but its -$8 so. no)
+    # stack just spreads it thin instead = no waste no pipes
+    # thats the whole point of having 2 of them. dont give the stack a port
+    21: {"scrubber": True,
+         "output_port": {"subtile": (0,1), "push_dir": (0,1), "buf": "output_buffer",
+                         "item_buf": "output_item", "cap": 8}},
+    22: {"silo": True, "fluid": False,
+         "input_ports": [{"items": [], "buf": "amount", "item_buf": "stored",
+                          "subtile": (0, 0), "from_dir": (0, 1), "cap": 500}],
+         "output_port": {"subtile": (0, 1), "push_dir": (0, 1),
+                         "buf": "amount", "item_buf": "stored", "cap": 500}},
+    23: {"silo": True, "fluid": True,
+         "input_ports": [{"items": [], "buf": "amount", "item_buf": "stored",
+                          "subtile": (0, 0), "from_dir": (0, 1), "cap": 100}],
+         "output_port": {"subtile": (0, 1), "push_dir": (0, 1),
+                         "buf": "amount", "item_buf": "stored", "cap": 100}},
     # depots
-    83: {"depot": True, "input_ports": [{"items": [], "buf": "input_buffer","item_buf": "input_item", "subtile": (3, 0),"from_dir": (0, 1),"cap": 200}]},
+    # cap must cover capacity x sell_threshold (350 x 1.0) or the depot fills
+    # to the cap and can never reach its own selling point
+    83: {"depot": True, "input_ports": [{"items": [], "buf": "input_buffer","item_buf": "input_item", "subtile": (3, 0),"from_dir": (0, 1),"cap": 350}]},
     51: {"depot": True, "fluid_depot": True, "input_ports": [{"items": ["lng","diesel","refined_diesel","poor_quality_diesel","crude_oil","water", "liquid_iron","liquid_copper","liquid_gold","machine_oil","residue", "light_oil","heavy_oil","naphtha","gasoline","ethanol"], "buf": "input_buffer","item_buf": "input_item","subtile": (1,0),"from_dir": (0,1),"cap": 400.0}]},
     29: {"liquid_burner": True, "input_ports": [{"items": ["residue","poor_quality_diesel","diesel","refined_diesel","crude_oil", "light_oil","heavy_oil","naphtha"], "buf": "input_buffer","item_buf": "input_item","subtile": (0,0),"from_dir": (0,1),"cap": 5.0}]},
-    97: {"power_pole": True, "pole_range": 10, "pole_tier": "LV"},
-    98: {"power_pole": True, "pole_range": 15, "pole_tier": "MV"},
-    99: {"power_pole": True, "pole_range": 70, "pole_tier": "HV"},
+    # Pole range lives in MACHINE_STATS["power_range"] (tiles).
+    97: {"power_pole": True, "pole_tier": "LV"},
+    98: {"power_pole": True, "pole_tier": "MV"},
+    99: {"power_pole": True, "pole_tier": "HV"},
     100: {"battery": True, "battery_tier": "MV"},
     101: {"battery": True, "battery_tier": "HV"},
     103: {"logic_gate": True, "gate_type": "NAND"},
@@ -663,8 +692,13 @@ MACHINE_DEFS = {
     113: {"logic_gate": True, "gate_type": "XOR"},
     13:  {"research_station": True, "rs_tier": 1},
     114: {"research_station": True, "rs_tier": 2, "input_ports": [{"items": [], "buf": "input_buffer","item_buf": "input_item","subtile": (3,0),"from_dir": (0,1),"cap": 10.0}]},
-    115: {"research_station": True, "rs_tier": 3, "input_ports": [ {"items": [], "buf": "input_buffer",  "item_buf": "input_item",  "subtile": (2,0),"from_dir": (0,1),"cap": 5.0}, {"items": [], "buf": "input2_buffer", "item_buf": "input2_item", "subtile": (5,0),"from_dir": (0,1),"cap": 5.0},]},
-    110: {"exhaust_stack": True, "disperse_rate": 0.001},
+    115: {"research_station": True, "rs_tier": 3, "input_ports": [ {"items": [], "buf": "input_buffer",  "item_buf": "input_item",  "subtile": (1,0),"from_dir": (0,1),"cap": 5.0}, {"items": [], "buf": "input2_buffer", "item_buf": "input2_item", "subtile": (3,0),"from_dir": (0,1),"cap": 5.0},]},
+    # Passive trickle: 0.0015%/s (5.4%/h) with no power and no upkeep. The
+    # powered Scrubber does 0.008%/s (28.8%/h) for 5 kME/s, so the stack is the
+    # cheap always-on baseline and the Scrubber is the real answer to a dirty
+    # factory. Before this the stack removed 0.004%/s for free, which made the
+    # Scrubber (0.005%/s, 5 kME/s, extra research) pointless.
+    110: {"exhaust_stack": True, "disperse_rate": 0.0015},
     106: {"input_ports": [{"item": "steam","buf": "input_buffer","subtile": (1,0),"from_dir": (0,1),"cap": 10.0}], "steam_turbine": True, "steam_rate": 0.5},        # steam/s at full output
     107: {"input_ports": [{"item": "gasoline","buf": "input_buffer","item_buf": "input_item","subtile": (0,0),"from_dir": (0,1),"cap": 5.0}], "fuel_generator": True, "fuel_type": "gasoline", "fuel_rate": 0.1},
     102: {"input_ports": [{"items": ["water","machine_oil"],"buf": "input_buffer","item_buf": "input_item","subtile": (0,0),"from_dir": (0,1),"cap": 4.0}], "transformer": True},

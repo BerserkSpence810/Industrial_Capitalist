@@ -1,0 +1,30 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# ── macOS / editors ─────────────────────────────────────────────────────────
+.DS_Store
+.vscode/
+*.code-workspace
+
+# ── PyInstaller output ──────────────────────────────────────────────────────
+build/
+dist/
+*.spec.bak
+
+# ── Player save data (world, money, research, per-slot saves, blueprints) ───
+data/
+
+# ── AI assistant / QA tooling: not part of the game ─────────────────────────
+# Knowledge graph produced by graphify
+graphify-out/
+.graphify/
+# Claude Code project config and transcripts
+.claude/
+CLAUDE.md
+# Play-test harness, scenarios and their captures
+qa/

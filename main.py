@@ -6,6 +6,13 @@ from settings import (POLLUTION_PER_MACHINE, get_pollution_income_multiplier, PO
 from contracts import ContractManager, LoanManager, MarketManager
 from research import ResearchManager, RP_VALUES
 from protest import ProtestManager
+from geometry import (
+    get_machine_origin, get_any_origin, get_machine_center,
+    rotate_direction, rotate_subtile, rotate_port, unrotate_subtile, port_pixel,
+    get_output_direction, get_input_direction, get_neighbor_in_direction,
+    get_zone_rect, get_zone_rect_for_multitile, power_link_distance,
+    machine_port_tiles,
+)
 
 from menu import run_menu, TutorialOverlay, _activate_slot, _save_active_to_slot
 
@@ -16,28 +23,8 @@ import time
 import os
 import math
 
-_crt_overlay = None
-_crt_overlay_size = None
-
-def get_crt_overlay(w, h):
-    global _crt_overlay, _crt_overlay_size
-    if _crt_overlay is None or _crt_overlay_size != (w, h):
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        for y in range(0, h, 3):
-            pygame.draw.line(surf, (0, 0, 0, 18), (0, y), (w, y), 1)
-        _crt_overlay      = surf
-        _crt_overlay_size = (w, h)
-    return _crt_overlay
-
 _SILO_TYPES = frozenset({22, 23})
 _GATE_TYPES = frozenset({103, 104, 105, 111, 112, 113})
-
-def get_machine_origin(grid, x, y):
-    tile = grid[y][x]
-    o = tile.get("origin")
-    if o is None:
-        return (x, y)
-    return tuple(o) if isinstance(o, list) else o
 
 PIPE_TYPES = (1, 4, 5, 6, 7, 131, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130)
 INTERSECTION_TYPES = (131, 124, 130)
@@ -49,37 +36,23 @@ _MULTI_TILE_TYPES = frozenset(
 
 _current_grid = None
 
-def get_coal_generator_origin(grid, x, y):
-    if grid[y][x]["type"] != 12: return None
-    return get_machine_origin(grid, x, y)
+_MODE_INPUT_CACHE = {}
 
-def get_research_station_origin(grid, x, y):
-    if grid[y][x]["type"] != 13: return None
-    return get_machine_origin(grid, x, y)
-
-def get_blast_furnace_origin(grid, x, y):
-    if grid[y][x]["type"] != 14: return None
-    return get_machine_origin(grid, x, y)
-
-def get_any_origin(grid, gx, gy):
-    ttype = grid[gy][gx].get("type", 0)
-    if MACHINE_STATS.get(ttype, {}).get("size", (1,1)) != (1,1):
-        return get_machine_origin(grid, gx, gy)
-    return (gx, gy)
-
-def get_machine_center(grid, gx, gy):
-    tile = grid[gy][gx]
-    ttype = tile.get("type", 0)
-    mstats = MACHINE_STATS.get(ttype, {})
-    size = mstats.get("size", (1, 1))
-    if size == (1, 1):
-        return (gx, gy)
-    ox, oy = get_machine_origin(grid, gx, gy)
-    rot = grid[oy][ox].get("rotation", 0)
-    w, h = size
-    if (rot // 90) % 2 == 1:
-        w, h = h, w
-    return (ox + w // 2, oy + h // 2)
+# modes are named after the OUTPUT, so lithium_carbonate mode eats lithium_sulfate
+# returns None for machines with no mode_recipes (diesel refinery)
+def mode_input_items(ttype, recipe_mode):
+    key = (ttype, recipe_mode)
+    if key in _MODE_INPUT_CACHE:
+        return _MODE_INPUT_CACHE[key]
+    proc = (MACHINE_DEFS.get(ttype, {}) or {}).get("process") or {}
+    modes = proc.get("mode_recipes")
+    if not modes:
+        result = None
+    else:
+        rec = modes.get(recipe_mode)
+        result = frozenset(i for i, _q in (rec.get("inputs") or [])) if rec else None
+    _MODE_INPUT_CACHE[key] = result
+    return result
 
 def machine_try_receive(grid, nx, ny, item, push_dx, push_dy, push_amount=1):
     ntype = grid[ny][nx].get("type", 0)
@@ -112,8 +85,13 @@ def machine_try_receive(grid, nx, ny, item, push_dx, push_dy, push_amount=1):
             if item not in accepted:
                 continue
             recipe_mode = origin_tile.get("recipe_mode")
-            if recipe_mode and recipe_mode in accepted and item != recipe_mode:
-                continue
+            if recipe_mode:
+                allowed = mode_input_items(ntype, recipe_mode)
+                if allowed is not None:
+                    if item not in allowed:
+                        continue
+                elif recipe_mode in accepted and item != recipe_mode:
+                    continue
         else:
             if item != port.get("item"):
                 continue
@@ -130,6 +108,8 @@ def machine_try_receive(grid, nx, ny, item, push_dx, push_dy, push_amount=1):
         return True
     return False
 
+# False = wouldnt take it, caller keeps the item
+# pipes accept from ANY side btw, only their output dir matters
 def push_item_to_neighbor(grid, item, nx, ny, push_dx, push_dy, amount=1):
     if not (0 <= nx < GRID_WIDTH and 0 <= ny < GRID_HEIGHT):
         return False
@@ -175,9 +155,10 @@ def push_item_to_neighbor(grid, item, nx, ny, push_dx, push_dy, amount=1):
     elif ntype == 83:
         ox, oy = get_machine_origin(grid, nx, ny)
         ot = grid[oy][ox]
-        if ny != oy:
-            return False
-        if push_dx != 0 or push_dy != 1:
+        lx, ly, lpush = unrotate_subtile(
+            nx - ox, ny - oy, push_dx, push_dy,
+            *MACHINE_STATS[ntype].get("size", (1, 1)), ot.get("rotation", 0))
+        if ly != 0 or lpush != (0, 1):
             return False
         cap = MACHINE_STATS[ntype].get("capacity", 100)
         ot.setdefault("stored", None)
@@ -190,9 +171,10 @@ def push_item_to_neighbor(grid, item, nx, ny, push_dx, push_dy, amount=1):
     elif ntype in (22, 23):
         ox, oy = get_machine_origin(grid, nx, ny)
         ot = grid[oy][ox]
-        if (nx, ny) != (ox, oy):
-            return False
-        if push_dx != 0 or push_dy != 1:
+        rx, ry, rfd, _, _ = rotate_port(
+            ox, oy, 0, 0, *MACHINE_STATS[ntype].get("size", (2, 2)),
+            (0, 1), ot.get("rotation", 0))
+        if (nx, ny) != (rx, ry) or (push_dx, push_dy) != rfd:
             return False
         cap = MACHINE_STATS[ntype]["capacity"]
         ot.setdefault("stored", None)
@@ -217,9 +199,10 @@ def push_item_to_neighbor(grid, item, nx, ny, push_dx, push_dy, amount=1):
     elif ntype == 17 and item in ("poor_quality_diesel", "diesel", "refined_diesel"):
         ox, oy = get_machine_origin(grid, nx, ny)
         ot = grid[oy][ox]
-        if nx != ox or ny != oy:
-            return False
-        if push_dx != 0 or push_dy != 1:
+        rx, ry, rfd, _, _ = rotate_port(
+            ox, oy, 0, 0, *MACHINE_STATS[17].get("size", (2, 1)),
+            (0, 1), ot.get("rotation", 0))
+        if (nx, ny) != (rx, ry) or (push_dx, push_dy) != rfd:
             return False
         ot.setdefault("fuel_buffer", 0.0)
         ot.setdefault("fuel_item", None)
@@ -227,10 +210,7 @@ def push_item_to_neighbor(grid, item, nx, ny, push_dx, push_dy, amount=1):
         if ot.get("fuel_item") in (None, item) and ot["fuel_buffer"] + amount <= fuel_cap:
             ot["fuel_buffer"] = ot["fuel_buffer"] + amount
             ot["fuel_item"] = item
-            rx, ry = ox + 1, oy
-            if 0 <= rx < GRID_WIDTH and grid[ry][rx].get("type") == 17:
-                grid[ry][rx]["fuel_buffer"] = ot["fuel_buffer"]
-                grid[ry][rx]["fuel_item"] = item
+            _mirror_fuel(grid, ox, oy, 17, ot)
             return True
     elif ntype in MACHINE_DEFS:
         return machine_try_receive(grid, nx, ny, item, push_dx, push_dy, amount)
@@ -269,6 +249,8 @@ def _find_origin(grid, x, y, ttype):
         oy -= 1
     return (ox, oy)
 
+# json hands tuples back as lists so origin/power_connections come out [x,y]
+# and stop matching. hence tuple() all over the place below
 def load_grid():
     if os.path.exists(GFILE):
         try:
@@ -387,7 +369,7 @@ def load_pollution():
             with open(POLLUTION_FILE, "r") as f:
                 val = float(json.load(f).get("pollution", 0.0))
                 if val < 0 or val > 2000:
-                    print(f"pollution.json value {val} outside 0-2000 range — resetting to 0")
+                    print(f"pollution.json value {val} outside 0-2000 range - resetting to 0")
                     return 0.0
                 return val
         except (json.JSONDecodeError, ValueError):
@@ -399,147 +381,68 @@ def save_pollution(value):
     with open(POLLUTION_FILE, "w") as f:
         json.dump({"pollution": value}, f)
 
-def rotate_direction(direction, rotation):
-    if direction is None:
-        return None
+# copy residue onto all 4 tiles so clicking any corner shows something
+def _mirror_scrubber(grid, ox, oy, origin_tile):
+    tw, th = MACHINE_STATS.get(21, {}).get("size", (2, 2))
+    if origin_tile.get("rotation", 0) % 180 != 0:
+        tw, th = th, tw
+    for dy in range(th):
+        for dx in range(tw):
+            cx, cy = ox + dx, oy + dy
+            if 0 <= cx < GRID_WIDTH and 0 <= cy < GRID_HEIGHT and grid[cy][cx].get("type") == 21:
+                grid[cy][cx]["output_buffer"]  = origin_tile.get("output_buffer", 0.0)
+                grid[cy][cx]["output_item"]    = origin_tile.get("output_item")
+                grid[cy][cx]["scrubbing"]      = origin_tile.get("scrubbing", 0.0)
+                grid[cy][cx]["residue_blocked"] = origin_tile.get("residue_blocked", False)
 
-    dirs = [UP, RIGHT, DOWN, LEFT]
-    if direction not in dirs:
-        return direction
 
-    idx = dirs.index(direction)
-    steps = (rotation // 90) % 4
-    new_idx = (idx - steps) % 4
-    return dirs[new_idx]
+def _mirror_fuel(grid, ox, oy, ttype, origin_tile):
+    """Copy the origin tile's fuel buffer/item onto every tile of the
+    machine's (rotation-aware) footprint so UI reads any tile correctly."""
+    tw, th = MACHINE_STATS.get(ttype, {}).get("size", (1, 1))
+    if origin_tile.get("rotation", 0) % 180 != 0:
+        tw, th = th, tw
+    for dy in range(th):
+        for dx in range(tw):
+            cx, cy = ox + dx, oy + dy
+            if 0 <= cx < GRID_WIDTH and 0 <= cy < GRID_HEIGHT and grid[cy][cx].get("type") == ttype:
+                grid[cy][cx]["fuel_buffer"] = origin_tile.get("fuel_buffer", 0.0)
+                grid[cy][cx]["fuel_item"]   = origin_tile.get("fuel_item")
 
-def rotate_port(ox, oy, sx, sy, tw, th, direction, rotation):
-    steps = (rotation // 90) % 4
-    cx, cy, cw, ch = sx, sy, tw, th
-    for _ in range(steps):
-        cx, cy = cy, cw - 1 - cx
-        cw, ch = ch, cw
-    rd = rotate_direction(direction, rotation)
-    return ox + cx, oy + cy, rd, cw, ch
+def _drill_output_tiles(grid, ox, oy, ttype, odir):
+    """The tiles along the face a drill points at, left to right / top to
+    bottom, so a wide drill can feed several lanes from one buffer."""
+    tw, th = MACHINE_STATS.get(ttype, {}).get("size", (1, 1))
+    if grid[oy][ox].get("rotation", 0) % 180 != 0:
+        tw, th = th, tw
+    dx, dy = odir
+    if dy == 1:
+        return [(ox + i, oy + th - 1) for i in range(tw)]
+    if dy == -1:
+        return [(ox + i, oy) for i in range(tw)]
+    if dx == 1:
+        return [(ox + tw - 1, oy + i) for i in range(th)]
+    if dx == -1:
+        return [(ox, oy + i) for i in range(th)]
+    return [(ox, oy)]
 
-def port_pixel(ox, oy, sx, sy, tw, th, rot):
-    steps = (rot // 90) % 4
-    cx, cy, cw, ch = sx, sy, tw, th
-    for _ in range(steps):
-        cx, cy = cy, cw - 1 - cx
-        cw, ch = ch, cw
-    px = (ox + cx) * TILE_SIZE + TILE_SIZE // 2
-    py = (oy + cy) * TILE_SIZE + TILE_SIZE // 2
-    return px, py
 
-def get_output_direction(tile):
-    machine_stats = MACHINE_STATS.get(tile["type"], {})
+def _mirror_drill(grid, ox, oy, ttype, origin_tile):
+    """Copy the origin's stored/amount over the whole footprint so clicking any
+    tile of a big drill shows what it actually holds."""
+    tw, th = MACHINE_STATS.get(ttype, {}).get("size", (1, 1))
+    if origin_tile.get("rotation", 0) % 180 != 0:
+        tw, th = th, tw
+    if tw == 1 and th == 1:
+        return
+    for dy in range(th):
+        for dx in range(tw):
+            cx, cy = ox + dx, oy + dy
+            if (0 <= cx < GRID_WIDTH and 0 <= cy < GRID_HEIGHT
+                    and grid[cy][cx].get("type") == ttype and (cx, cy) != (ox, oy)):
+                grid[cy][cx]["stored"] = origin_tile.get("stored")
+                grid[cy][cx]["amount"] = origin_tile.get("amount", 0)
 
-    if "output_dirs" in machine_stats:
-        base_dirs = machine_stats["output_dirs"]
-        rotation = tile.get("rotation", 0)
-        return [rotate_direction(d, rotation) for d in base_dirs]
-
-    base_dir = machine_stats.get("output_dir", None)
-    if base_dir is None:
-        return None
-    rotation = tile.get("rotation", 0) 
-    return rotate_direction(base_dir, rotation)
-
-def get_input_direction(tile):
-    machine_stats = MACHINE_STATS.get(tile["type"], {})
-
-    if "input_dirs" in machine_stats:
-        base_dirs = machine_stats["input_dirs"]
-        rotation = tile.get("rotation", 0)
-        return [rotate_direction(d, rotation) for d in base_dirs]
-
-    base_dir = machine_stats.get("input_dir", None)
-    if base_dir is None:
-        return None
-    rotation = tile.get("rotation", 0)
-    return rotate_direction(base_dir, rotation)
-
-def get_neighbor_in_direction(x, y, direction):
-    dx, dy = direction
-    nx, ny = x + dx, y + dy
-    if 0 <= nx < GRID_WIDTH and 0 <= ny < GRID_HEIGHT:
-        return nx, ny
-    return None
-
-def get_zone_rect(x, y, direction, is_input=False):
-    ZONE_WIDTH = 12
-    ZONE_EXTEND = 4
-    base_x = x * TILE_SIZE
-    base_y = y * TILE_SIZE
-    center_x = base_x + TILE_SIZE // 2
-    center_y = base_y + TILE_SIZE // 2
-    dx, dy = direction
-
-    if dx == 0 and dy == -1:
-        return pygame.Rect(
-            center_x - ZONE_WIDTH // 2,
-            base_y - ZONE_EXTEND,
-            ZONE_WIDTH,
-            ZONE_EXTEND + 3,
-        )
-    elif dx == 0 and dy == 1:
-        return pygame.Rect(
-            center_x - ZONE_WIDTH // 2,
-            base_y + TILE_SIZE - 3,
-            ZONE_WIDTH,
-            ZONE_EXTEND + 3,
-        )
-    elif dx == -1 and dy == 0:
-        return pygame.Rect(
-            base_x - ZONE_EXTEND,
-            center_y - ZONE_WIDTH // 2,
-            ZONE_EXTEND + 3,
-            ZONE_WIDTH,
-        )
-    elif dx == 1 and dy == 0:
-        return pygame.Rect(
-            base_x + TILE_SIZE - 3,
-            center_y - ZONE_WIDTH // 2,
-            ZONE_EXTEND + 3,
-            ZONE_WIDTH,
-        )
-
-    return None
-
-def get_zone_rect_for_multitile(x, y, direction, width, height, is_input=False):
-    ZONE_WIDTH = 12
-    ZONE_EXTEND = 4
-    base_x = x * TILE_SIZE
-    base_y = y * TILE_SIZE
-    dx, dy = direction
-
-    if dx == 0 and dy == -1:
-        center_x = base_x + (TILE_SIZE * width) // 2
-        return pygame.Rect(center_x - ZONE_WIDTH // 2,
-                           base_y - ZONE_EXTEND,
-                           ZONE_WIDTH, ZONE_EXTEND + 3)
-
-    elif dx == 0 and dy == 1:
-        center_x = base_x + (TILE_SIZE * width) // 2
-        bottom_y  = base_y + TILE_SIZE * height
-        return pygame.Rect(center_x - ZONE_WIDTH // 2,
-                           bottom_y - 3,
-                           ZONE_WIDTH, ZONE_EXTEND + 3)
-
-    elif dx == -1 and dy == 0:
-        center_y = base_y + (TILE_SIZE * height) // 2
-        return pygame.Rect(base_x - ZONE_EXTEND,
-                           center_y - ZONE_WIDTH // 2,
-                           ZONE_EXTEND + 3, ZONE_WIDTH)
-
-    elif dx == 1 and dy == 0:
-        center_y = base_y + (TILE_SIZE * height) // 2
-        right_x   = base_x + TILE_SIZE * width
-        return pygame.Rect(right_x - 3,
-                           center_y - ZONE_WIDTH // 2,
-                           ZONE_EXTEND + 3, ZONE_WIDTH)
-
-    return None
 
 def _port_accepts_from(grid, tx, ty, push_dx, push_dy):
     ttype = grid[ty][tx].get("type", 0)
@@ -570,7 +473,9 @@ def can_connect(source_x, source_y, source_tile, target_x, target_y, target_tile
                 return True
             if ttype_t == 83:
                 ox83, oy83 = get_machine_origin(grid, target_x, target_y)
-                if target_y == oy83 and (ddx, ddy) == (0, 1):
+                rot83 = grid[oy83][ox83].get("rotation", 0)
+                lx83, ly83, lpush83 = unrotate_subtile(target_x - ox83, target_y - oy83, ddx, ddy,*MACHINE_STATS[83].get("size", (6, 6)), rot83)
+                if ly83 == 0 and lpush83 == (0, 1):
                     return True
 
     if source_tile.get("type") == 15:
@@ -631,13 +536,19 @@ def can_connect(source_x, source_y, source_tile, target_x, target_y, target_tile
     if target_tile.get("type") in (22, 23):
         raw = target_tile.get("origin", (target_x, target_y))
         ox, oy = (tuple(raw) if isinstance(raw, list) else raw)
-        if source_x == ox and source_y == oy - 1 and target_x == ox and target_y == oy:
+        rot = grid[oy][ox].get("rotation", 0)
+        size = MACHINE_STATS[target_tile["type"]].get("size", (2, 2))
+        tx, ty, rd, _, _ = rotate_port(ox, oy, 0, 0, *size, (0, 1), rot)
+        if source_x == tx - rd[0] and source_y == ty - rd[1] and target_x == tx and target_y == ty:
             return True
         return False
     if source_tile.get("type") in (22, 23):
         raw = source_tile.get("origin", (source_x, source_y))
         ox, oy = (tuple(raw) if isinstance(raw, list) else raw)
-        if source_x == ox and source_y == oy + 1 and target_x == ox and target_y == oy + 2:
+        rot = grid[oy][ox].get("rotation", 0)
+        size = MACHINE_STATS[source_tile["type"]].get("size", (2, 2))
+        tx, ty, rd, _, _ = rotate_port(ox, oy, 0, 1, *size, (0, 1), rot)
+        if source_x == tx and source_y == ty and target_x == tx + rd[0] and target_y == ty + rd[1]:
             return True
         return False
 
@@ -780,16 +691,6 @@ def can_connect(source_x, source_y, source_tile, target_x, target_y, target_tile
 
     return source_output_rect.colliderect(target_input_rect)
 
-def is_part_of_coal_generator(grid, x, y):
-    return grid[y][x]["type"] == 12
-
-def can_coal_generator_receive_input(grid, target_x, target_y):
-    origin = get_coal_generator_origin(grid, target_x, target_y)
-    if not origin:
-        return False
-    origin_x, origin_y = origin
-    return target_x == origin_x and target_y == origin_y
-
 def is_powered(tile):
     machine_stats = MACHINE_STATS.get(tile["type"], {})
     power_input = machine_stats.get("power_input", 0)
@@ -805,6 +706,7 @@ def get_power_efficiency(tile):
     current_power = tile.get("power", 0)
     return min(1.0, current_power / power_input)
 
+# gens fill, consumers drain. no transfers here, thats update_world
 def update_power_system(grid, dt):
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
@@ -880,8 +782,14 @@ def update_power_system(grid, dt):
                     tile["power"] = max(0.0, tile["power"] - draw)
 
 def transfer_power_between_tiles(
-    source_x, source_y, source_tile, target_x, target_y, target_tile, dt
+    source_x, source_y, source_tile, target_x, target_y, target_tile, dt,
+    max_amount=None
 ):
+    """Move power along one connection.
+
+    max_amount = what this connection can take this tick, caller works out the
+    slices first. without it connection #1 drains the source every tick and
+    every other branch reads NO POWER forever"""
     raw_origin = source_tile.get("origin")
     if raw_origin is not None:
         ox, oy = tuple(raw_origin) if isinstance(raw_origin, list) else raw_origin
@@ -900,6 +808,8 @@ def transfer_power_between_tiles(
     source_transfer_rate = source_stats.get("power_transfer", 0)
     if source_transfer_rate == 0:
         return
+    if MACHINE_DEFS.get(source_tile["type"], {}).get("transformer") and not source_tile.get("cooled"):
+        source_transfer_rate *= 0.25
 
     raw_origin = target_tile.get("origin")
     if raw_origin is not None:
@@ -919,7 +829,8 @@ def transfer_power_between_tiles(
     target_max   = target_tile.get("max_power", 0)
 
     if source_power > 0 and target_power < target_max:
-        amount = min(transfer_rate * dt, source_power, target_max - target_power)
+        share = source_power if max_amount is None else min(source_power, max_amount)
+        amount = min(transfer_rate * dt, share, target_max - target_power)
         if amount > 0:
             source_tile["power"] -= amount
             target_tile["power"] += amount
@@ -952,12 +863,8 @@ def update_diesel_generators(grid, dt):
                 power_rate = DIESEL_GEN_OUTPUT.get(fuel_type, 0)
                 tile["power"] = min(tile["power"] + power_rate * dt, tile["max_power"])
 
-            rx, ry = ox + 1, oy
-            if 0 <= rx < GRID_WIDTH and grid[ry][rx].get("type") == 17:
-                grid[ry][rx]["fuel_buffer"] = tile["fuel_buffer"]
-                grid[ry][rx]["fuel_item"]   = tile.get("fuel_item")
-                grid[ry][rx]["power"]       = tile["power"]
-                grid[ry][rx]["max_power"]   = tile["max_power"]
+            _mirror_fuel(grid, ox, oy, 17, tile)
+            _mirror_power(grid, ox, oy, 17, tile)
 
 def _mirror_power(grid, ox, oy, ttype, tile):
     tw, th = MACHINE_STATS.get(ttype, {}).get("size", (1, 1))
@@ -971,7 +878,11 @@ def _mirror_power(grid, ox, oy, ttype, tile):
                 grid[cy][cx]["max_power"] = tile["max_power"]
 
 def update_special_generators(grid, dt):
+    """Returns (emission_rate, scrub_rate) in %/s. Scrubbing is reported as a
+    positive number so the UI can show gross emissions and gross scrubbing
+    separately instead of only their net."""
     pollution_rate = 0.0
+    scrub_rate = 0.0
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
             tile = grid[y][x]
@@ -987,7 +898,8 @@ def update_special_generators(grid, dt):
             tile.setdefault("max_power", stats.get("power_capacity", 0))
 
             if ttype == 110:
-                pollution_rate -= mdef.get("disperse_rate", 0.001)
+                scrub_rate += mdef.get("disperse_rate", 0.001)
+                tile["scrubbing"] = mdef.get("disperse_rate", 0.001)
                 continue
 
             out_rate = stats.get("power_output", 0)
@@ -1031,15 +943,17 @@ def update_special_generators(grid, dt):
                 if ttype != 96:
                     pollution_rate += POLLUTION_PER_MACHINE.get(ttype, 0) * frac
             _mirror_power(grid, ox, oy, ttype, tile)
-    return pollution_rate
+    return pollution_rate, scrub_rate
 
+# scans top-left -> bottom-right so a chain pointing down moves a whole step per
+# tick and one pointing up moves 1 tile. leave it, ratios are balanced round it
 def update_world(grid, dt, money, pollution, contracts, ui=None,
                  research=None, protesters=None, market=None):
     global _current_grid
     _current_grid = grid
     update_power_system(grid, dt)
     update_diesel_generators(grid, dt)
-    _special_pollution = update_special_generators(grid, dt)
+    _special_pollution, _special_scrub = update_special_generators(grid, dt)
     for _sy in range(GRID_HEIGHT):
         for _sx in range(GRID_WIDTH):
             _st = grid[_sy][_sx]
@@ -1067,16 +981,31 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 rs1_active += 1
 
     tick_pollution_rate = _special_pollution
+    tick_scrub_rate = _special_scrub
 
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
             tile = grid[y][x]
             if "power_connections" in tile:
-                for conn_x, conn_y in tile["power_connections"]:
-                    if 0 <= conn_x < GRID_WIDTH and 0 <= conn_y < GRID_HEIGHT:
-                        transfer_power_between_tiles(
-                            x, y, tile, conn_x, conn_y, grid[conn_y][conn_x], dt
-                        )
+                _conns = tile["power_connections"]
+                _n = len(_conns)
+                if _n:
+                    # snapshot FIRST then divide!! if you read power inside the
+                    # loop branch 1 gets 1/4 of everything, branch 2 gets 1/4 of
+                    # whats LEFT, and so on down the list
+                    # was 115k/86k/65k/49k across 4 batteries. now theyre equal
+                    _src = tile
+                    _raw_o = tile.get("origin")
+                    if _raw_o is not None:
+                        _ox2, _oy2 = (tuple(_raw_o) if isinstance(_raw_o, list) else _raw_o)
+                        _src = grid[_oy2][_ox2]
+                    _slice = _src.get("power", 0.0) / _n
+                    for conn_x, conn_y in _conns:
+                        if 0 <= conn_x < GRID_WIDTH and 0 <= conn_y < GRID_HEIGHT:
+                            transfer_power_between_tiles(
+                                x, y, tile, conn_x, conn_y, grid[conn_y][conn_x], dt,
+                                max_amount=_slice
+                            )
 
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
@@ -1087,6 +1016,14 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
 
             mdef = MACHINE_DEFS.get(ttype, {})
             if mdef.get("drill"):
+                # One machine mines once, from its origin tile. Without this
+                # guard every tile of a multi-tile drill mined independently:
+                # a 4x4 Quarry ran at 4x its documented rate along the bottom
+                # edge while its twelve inner tiles filled up and stalled
+                # forever, holding items that could never leave.
+                ox, oy = get_machine_origin(grid, x, y)
+                if (x, y) != (ox, oy):
+                    continue
                 drill_cap  = MACHINE_STATS[ttype]["capacity"]
                 mine_time  = mdef["mine_time"]
                 if "resources" in mdef:
@@ -1113,12 +1050,18 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 if tile["output_timer"] >= 0.5 and tile["amount"] > 0:
                     odir = get_output_direction(tile)
                     if odir is not None and not isinstance(odir, list):
-                        nx, ny = x + odir[0], y + odir[1]
-                        if push_item_to_neighbor(grid, tile["stored"], nx, ny, odir[0], odir[1]):
-                            tile["amount"] -= 1
-                            if tile["amount"] == 0:
-                                tile["stored"] = None
+                        # a wide drill may still feed any lane along the face
+                        # it points at -- from one shared buffer
+                        for (ex, ey) in _drill_output_tiles(grid, ox, oy, ttype, odir):
+                            nx, ny = ex + odir[0], ey + odir[1]
+                            if push_item_to_neighbor(grid, tile["stored"], nx, ny,
+                                                     odir[0], odir[1]):
+                                tile["amount"] -= 1
+                                if tile["amount"] == 0:
+                                    tile["stored"] = None
+                                break
                     tile["output_timer"] = 0
+                _mirror_drill(grid, ox, oy, ttype, tile)
 
             elif mdef.get("fluid_producer"):
                 ox, oy = get_machine_origin(grid, x, y)
@@ -1135,10 +1078,12 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 push_amt = mdef.get("push_amount", 0.45)
                 if tile["output_timer"] >= 0.5 and tile["fluid_buffer"] >= push_amt:
                     sx_, sy_ = mdef["output_subtile"]
-                    dx_, dy_ = mdef["push_dir"]
-                    out_x = ox + sx_ + dx_
-                    out_y = oy + sy_ + dy_
-                    if push_item_to_neighbor(grid, mdef["resource"], out_x, out_y, dx_, dy_, push_amt):
+                    pd_ = tuple(mdef["push_dir"])
+                    tw_, th_ = MACHINE_STATS.get(ttype, {}).get("size", (1, 1))
+                    px_, py_, rd_, _, _ = rotate_port(
+                        ox, oy, sx_, sy_, tw_, th_, pd_, tile.get("rotation", 0))
+                    out_x, out_y = px_ + rd_[0], py_ + rd_[1]
+                    if push_item_to_neighbor(grid, mdef["resource"], out_x, out_y, rd_[0], rd_[1], push_amt):
                         tile["fluid_buffer"] -= push_amt
                     tile["output_timer"] = 0.0
 
@@ -1343,10 +1288,49 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 ox, oy = get_machine_origin(grid, x, y)
                 if (x, y) != (ox, oy):
                     continue
-                if is_powered(tile):
+                # catches the pollution -> fills with residue -> nowhere for the
+                # residue to go -> it stops. clean air isnt free, thats the point
+                sstats = MACHINE_STATS.get(21, {})
+                sport  = mdef.get("output_port") or {}
+                sbuf   = sport.get("buf", "output_buffer")
+                scap   = sport.get("cap", 8)
+                tile.setdefault(sbuf, 0.0)
+                backed_up = tile[sbuf] >= scap - 1e-9
+                if is_powered(tile) and not backed_up:
                     eff = get_power_efficiency(tile)
-                    scrub_rate = MACHINE_STATS.get(21, {}).get("scrub_rate", 0)
-                    tick_pollution_rate -= scrub_rate * eff
+                    rate = sstats.get("scrub_rate", 0) * eff
+                    tick_scrub_rate += rate
+                    tile["scrubbing"] = rate
+                    tile[sbuf] = min(
+                        scap, tile[sbuf] + sstats.get("residue_rate", 0.0) * eff * dt)
+                    tile[sport.get("item_buf", "output_item")] = "residue"
+                else:
+                    tile["scrubbing"] = 0.0
+                    tile["residue_blocked"] = backed_up
+
+                # whole units only out the bottom. push_item_to_neighbor goes
+                # funny with fractions
+                if sport and tile.get(sbuf, 0) >= 1.0:
+                    tile.setdefault("output_timer", 0.0)
+                    tile["output_timer"] += dt
+                    if tile["output_timer"] >= 0.5:
+                        tile["output_timer"] = 0.0
+                        sx_s, sy_s = sport["subtile"]
+                        pd_s = tuple(sport["push_dir"])
+                        tw_s, th_s = sstats.get("size", (2, 2))
+                        ax_s, ay_s, rd_s, _, _ = rotate_port(
+                            ox, oy, sx_s, sy_s, tw_s, th_s, pd_s, tile.get("rotation", 0))
+                        while tile.get(sbuf, 0) >= 1.0:
+                            if push_item_to_neighbor(grid, "residue",
+                                                     ax_s + rd_s[0], ay_s + rd_s[1],
+                                                     rd_s[0], rd_s[1], 1):
+                                tile[sbuf] -= 1.0
+                            else:
+                                break
+                        if tile.get(sbuf, 0) <= 1e-6:
+                            tile[sbuf] = 0.0
+                            tile[sport.get("item_buf", "output_item")] = None
+                _mirror_scrubber(grid, ox, oy, tile)
 
             elif ttype == 29:
                 ox, oy = get_machine_origin(grid, x, y)
@@ -1360,17 +1344,21 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                         tile["input_item"] = None
                     tick_pollution_rate += 0.003
 
-            elif ttype == 49:
+            elif mdef.get("transformer"):
+                # HV Transformer: coolant (water / machine_oil) is optional but
+                # without it the transformer relays at only 25% of its rated
+                # power_transfer (see transfer_power_between_tiles).
                 ox, oy = get_machine_origin(grid, x, y)
                 if (x, y) != (ox, oy):
                     continue
                 if tile.get("input_buffer", 0) > 0:
-                    burn = min(0.5 * dt, tile.get("input_buffer", 0))
-                    tile["input_buffer"] -= burn
+                    tile["input_buffer"] = max(0.0, tile["input_buffer"] - 0.02 * dt)
                     if tile["input_buffer"] <= 1e-6:
-                        tile["input_buffer"] = 0
+                        tile["input_buffer"] = 0.0
                         tile["input_item"] = None
-                    tick_pollution_rate += POLLUTION_PER_MACHINE.get(49, 0.002)
+                    tile["cooled"] = True
+                else:
+                    tile["cooled"] = False
 
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
@@ -1380,7 +1368,8 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 continue
 
             mdef = MACHINE_DEFS.get(ttype, {})
-            if "output_port" in mdef and not mdef.get("drill") and not mdef.get("fluid_producer") and not mdef.get("diesel_gen"):
+            if ("output_port" in mdef and not mdef.get("drill") and not mdef.get("fluid_producer")
+                    and not mdef.get("diesel_gen") and not mdef.get("silo")):
                 ox, oy = get_machine_origin(grid, x, y)
                 if (x, y) != (ox, oy):
                     continue
@@ -1465,10 +1454,13 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 tile.setdefault("output_timer", 0.0)
                 tile["output_timer"] += dt
                 if tile["output_timer"] >= 0.5 and tile.get("amount", 0) > 0 and tile.get("stored"):
-                    out_x, out_y = ox, oy + 2
+                    px_, py_, rd_, _, _ = rotate_port(
+                        ox, oy, 0, 1, *MACHINE_STATS[ttype].get("size", (2, 2)),
+                        (0, 1), tile.get("rotation", 0))
+                    out_x, out_y = px_ + rd_[0], py_ + rd_[1]
                     push_amt = 1 if ttype == 22 else 0.5
                     if tile["amount"] >= push_amt and push_item_to_neighbor(
-                            grid, tile["stored"], out_x, out_y, 0, 1, push_amt):
+                            grid, tile["stored"], out_x, out_y, rd_[0], rd_[1], push_amt):
                         tile["amount"] -= push_amt
                         if tile["amount"] <= 1e-6:
                             tile["amount"] = 0
@@ -1612,6 +1604,16 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 tile["cooldown_timer"] = max(0.0, tile["cooldown_timer"] - dt)
 
             dstats = MACHINE_STATS.get(tile["type"], {})
+            ddef   = MACHINE_DEFS.get(tile["type"], {}) or {}
+            # A depot that declares input_ports (the Huge Truck Depot) receives
+            # into that port's buffer, while this sell path reads the legacy
+            # stored/amount pair. Mirror the two so one path serves both --
+            # without this the Huge Truck Depot filled up and never sold.
+            depot_port = next((p for p in (ddef.get("input_ports") or [])
+                               if p.get("buf") != "amount"), None)
+            if depot_port is not None:
+                tile["amount"] = tile.get(depot_port["buf"], 0)
+                tile["stored"] = tile.get(depot_port.get("item_buf", "input_item"))
             depot_capacity  = dstats.get("capacity", 10)
             cooldown_time   = dstats.get("cooldown_time", 15.0)
             sell_bonus      = dstats.get("sell_bonus", 1.0)
@@ -1652,6 +1654,9 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
 
                 tile["stored"] = None
                 tile["amount"] = 0
+                if depot_port is not None:
+                    tile[depot_port["buf"]] = 0
+                    tile[depot_port.get("item_buf", "input_item")] = None
             elif tile["amount"] >= depot_capacity:
                 for contract in contracts.get_active_contracts():
                     cid = contract["id"]
@@ -1712,15 +1717,22 @@ def update_world(grid, dt, money, pollution, contracts, ui=None,
                 tile["input_item"] = None
                 tile["cooldown_timer"] = cooldown_time
 
-    delta = tick_pollution_rate * dt
+    net_pollution_rate = tick_pollution_rate - tick_scrub_rate
+    delta = net_pollution_rate * dt
     if pollution + delta < 0 and pollution >= 0:
         pollution = 0.0
     else:
         pollution += delta
     pollution = max(0.0, min(2000.0, pollution))
 
+    if ui is not None:
+        ui.pollution_emitted = tick_pollution_rate
+        ui.pollution_scrubbed = tick_scrub_rate
+        ui.pollution_net = net_pollution_rate
+
     return money, pollution
 
+# the green/red/orange bits on Z. same machine_port_tiles() as the ghost uses
 def draw_connection_zones(world_surface, grid):
     GREEN      = (80, 255, 80)
     GREEN_EDGE = (150, 255, 150)
@@ -1730,135 +1742,51 @@ def draw_connection_zones(world_surface, grid):
     ORG_EDGE   = (255, 200, 100)
 
     drawn_origins = set()
-
     for y in range(GRID_HEIGHT):
         for x in range(GRID_WIDTH):
             tile = grid[y][x]
             ttype = tile["type"]
             if ttype == 0:
                 continue
-
-            mstats = MACHINE_STATS.get(ttype, {})
-            tw, th = mstats.get("size", (1, 1))
-            is_multi = tw > 1 or th > 1
-
-            if is_multi:
-                raw_origin = tile.get("origin", (x, y))
-                origin = tuple(raw_origin) if isinstance(raw_origin, list) else raw_origin
-                if origin in drawn_origins:
-                    continue
-                drawn_origins.add(origin)
-                ox, oy = origin
-
-                mdef = MACHINE_DEFS.get(ttype)
-
-                if ttype == 12:
-                    rot = grid[oy][ox].get("rotation", 0)
-                    tx, ty, rd, _, _ = rotate_port(ox, oy, 0, 0, 2, 2, UP, rot)
-                    rect = get_zone_rect(tx, ty, rd, is_input=True)
-                    if rect:
-                        pygame.draw.rect(world_surface, GREEN, rect)
-                        pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
-                    continue
-
-                if mdef and mdef.get("fluid_producer"):
-                    rot = grid[oy][ox].get("rotation", 0)
-                    sx_, sy_ = mdef.get("output_subtile", (1, 0))
-                    dx_, dy_ = mdef.get("push_dir", (1, 0))
-                    tw_, th_ = mstats.get("size", (1, 1))
-                    tx, ty, rd, _, _ = rotate_port(ox, oy, sx_, sy_, tw_, th_, (dx_, dy_), rot)
-                    rect = get_zone_rect(tx, ty, rd, is_input=False)
-                    if rect:
-                        pygame.draw.rect(world_surface, RED, rect)
-                        pygame.draw.rect(world_surface, RED_EDGE, rect, 1)
-                    continue
-
-                if ttype == 17:
-                    rot = grid[oy][ox].get("rotation", 0)
-                    tw_, th_ = mstats.get("size", (1, 1))
-                    tx, ty, rd, _, _ = rotate_port(ox, oy, 0, 0, tw_, th_, UP, rot)
-                    rect = get_zone_rect(tx, ty, rd, is_input=True)
-                    if rect:
-                        pygame.draw.rect(world_surface, GREEN, rect)
-                        pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
-                    continue
-
-                if mdef and ("input_ports" in mdef or "output_port" in mdef):
-                    rot = grid[oy][ox].get("rotation", 0)
-                    tw_, th_ = mstats.get("size", (1, 1))
-                    for port in mdef.get("input_ports", []):
-                        sx, sy = port["subtile"]
-                        fdx, fdy = port["from_dir"]
-                        base_edge = (-fdx, -fdy)
-                        tx, ty, rd, _, _ = rotate_port(ox, oy, sx, sy, tw_, th_, base_edge, rot)
-                        rect = get_zone_rect(tx, ty, rd, is_input=True)
-                        if rect:
-                            pygame.draw.rect(world_surface, GREEN, rect)
-                            pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
-                    oport = mdef.get("output_port")
-                    if oport:
-                        sx, sy = oport["subtile"]
-                        pdx, pdy = oport["push_dir"]
-                        tx, ty, rd, _, _ = rotate_port(ox, oy, sx, sy, tw_, th_, (pdx, pdy), rot)
-                        rect = get_zone_rect(tx, ty, rd, is_input=False)
-                        if rect:
-                            pygame.draw.rect(world_surface, RED, rect)
-                            pygame.draw.rect(world_surface, RED_EDGE, rect, 1)
-                    oport2 = mdef.get("output_port2")
-                    if oport2:
-                        sx2, sy2 = oport2["subtile"]
-                        pdx2, pdy2 = oport2["push_dir"]
-                        tx2, ty2, rd2, _, _ = rotate_port(ox, oy, sx2, sy2, tw_, th_, (pdx2, pdy2), rot)
-                        rect2 = get_zone_rect(tx2, ty2, rd2, is_input=False)
-                        if rect2:
-                            pygame.draw.rect(world_surface, ORANGE, rect2)
-                            pygame.draw.rect(world_surface, ORG_EDGE, rect2, 1)
-                elif ttype in (22, 23):
-                    in_rect = get_zone_rect(ox, oy, UP, is_input=True)
-                    if in_rect:
-                        pygame.draw.rect(world_surface, GREEN, in_rect)
-                        pygame.draw.rect(world_surface, GREEN_EDGE, in_rect, 1)
-                    out_rect = get_zone_rect(ox, oy + 1, DOWN, is_input=False)
-                    if out_rect:
-                        pygame.draw.rect(world_surface, RED, out_rect)
-                        pygame.draw.rect(world_surface, RED_EDGE, out_rect, 1)
-                else:
-                    origin_tile = grid[oy][ox]
-                    output_dir = get_output_direction(origin_tile)
-                    if output_dir:
-                        dirs = output_dir if isinstance(output_dir, list) else [output_dir]
-                        for d in dirs:
-                            rect = get_zone_rect_for_multitile(ox, oy, d, tw, th, is_input=False)
-                            if rect:
-                                pygame.draw.rect(world_surface, RED, rect)
-                                pygame.draw.rect(world_surface, RED_EDGE, rect, 1)
-                    input_dir = get_input_direction(origin_tile)
-                    if input_dir:
-                        dirs = input_dir if isinstance(input_dir, list) else [input_dir]
-                        for d in dirs:
-                            rect = get_zone_rect_for_multitile(ox, oy, d, tw, th, is_input=True)
-                            if rect:
-                                pygame.draw.rect(world_surface, GREEN, rect)
-                                pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
+            raw_origin = tile.get("origin", (x, y))
+            origin = tuple(raw_origin) if isinstance(raw_origin, list) else raw_origin
+            if origin in drawn_origins:
                 continue
+            drawn_origins.add(origin)
+            ox, oy = origin
+            rot = grid[oy][ox].get("rotation", 0)
+            ins, outs = machine_port_tiles(ttype, rot, MACHINE_DEFS, MACHINE_STATS)
 
-            output_dir = get_output_direction(tile)
-            if output_dir:
-                dirs = output_dir if isinstance(output_dir, list) else [output_dir]
-                for d in dirs:
-                    rect = get_zone_rect(x, y, d, is_input=False)
-                    if rect:
-                        pygame.draw.rect(world_surface, RED, rect)
-                        pygame.draw.rect(world_surface, RED_EDGE, rect, 1)
+            for dx, dy, travel in ins:
+                # travel = way its moving, flip it to get the face it enters
+                # through. forgot this and drew every input bar on the wrong side
+                edge = (-travel[0], -travel[1])
+                rect = get_zone_rect(ox + dx, oy + dy, edge, is_input=True)
+                if rect:
+                    pygame.draw.rect(world_surface, GREEN, rect)
+                    pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
 
-            input_dir = get_input_direction(tile)
-            if input_dir:
-                dirs = input_dir if isinstance(input_dir, list) else [input_dir]
-                for d in dirs:
-                    rect = get_zone_rect(x, y, d, is_input=True)
-                    if rect:
-                        pygame.draw.rect(world_surface, GREEN, rect)
-                        pygame.draw.rect(world_surface, GREEN_EDGE, rect, 1)
+            mdef = MACHINE_DEFS.get(ttype) or {}
+            second = mdef.get("output_port2")
+            second_key = None
+            if second:
+                sx2, sy2 = second["subtile"]
+                pd2 = tuple(second["push_dir"])
+                rx2, ry2, rpd2, _, _ = rotate_port(
+                    0, 0, sx2, sy2, *MACHINE_STATS.get(ttype, {}).get("size", (1, 1)),
+                    pd2, rot)
+                second_key = (rx2, ry2, rpd2)
+            for dx, dy, push in outs:
+                rect = get_zone_rect(ox + dx, oy + dy, push, is_input=False)
+                if not rect:
+                    continue
+                if second_key is not None and (dx, dy, push) == second_key:
+                    pygame.draw.rect(world_surface, ORANGE, rect)
+                    pygame.draw.rect(world_surface, ORG_EDGE, rect, 1)
+                else:
+                    pygame.draw.rect(world_surface, RED, rect)
+                    pygame.draw.rect(world_surface, RED_EDGE, rect, 1)
+
 
 def _draw_signal_wires(world_surface, grid):
     WIRE_COL  = (80, 255, 200)
@@ -2075,7 +2003,35 @@ _image_defs = [
     (106, "assets/Power/Steam-Turbine.png",              None),
     (107, "assets/Power/Gasoline-Generator.png",         None),
     (108, "assets/Power/Coal-Power-Plant.png",           None),
+    (109, "assets/Processors/Electric-Furnace.png",      None),
+    (110, "assets/Stations/Exhaust-Stack.png",           None),
+    (111, "assets/Logic/AND-Gate.png",                   None),
+    (112, "assets/Logic/OR-Gate.png",                    None),
+    (113, "assets/Logic/XOR-Gate.png",                   None),
+    (114, "assets/Stations/Research-Station-2.png",      None),
+    (115, "assets/Stations/Research-Station-3.png",      None),
+    (116, "assets/Processors/Industrial-Firebox.png",    None),
+    (117, "assets/Power/Electric-Water-Heater.png",      None),
+    (118, "assets/Power/Infinite-Generator.png",         None),
+    (119, "assets/Pipes/Adurite-Pipe.png",               (TILE_SIZE, TILE_SIZE)),
+    (120, "assets/Pipes/Adurite-L-Pipe-R.png",           (TILE_SIZE, TILE_SIZE)),
+    (121, "assets/Pipes/Adurite-L-Pipe-L.png",           (TILE_SIZE, TILE_SIZE)),
+    (122, "assets/Pipes/Adurite-Merger.png",             (TILE_SIZE, TILE_SIZE)),
+    (123, "assets/Pipes/Adurite-Splitter.png",           (TILE_SIZE, TILE_SIZE)),
+    (124, "assets/Pipes/Adurite-Intersection.png",       (TILE_SIZE, TILE_SIZE)),
+    (125, "assets/Pipes/Iridium-Pipe.png",               (TILE_SIZE, TILE_SIZE)),
+    (126, "assets/Pipes/Iridium-L-Pipe-R.png",           (TILE_SIZE, TILE_SIZE)),
+    (127, "assets/Pipes/Iridium-L-Pipe-L.png",           (TILE_SIZE, TILE_SIZE)),
+    (128, "assets/Pipes/Iridium-Merger.png",             (TILE_SIZE, TILE_SIZE)),
+    (129, "assets/Pipes/Iridium-Splitter.png",           (TILE_SIZE, TILE_SIZE)),
+    (130, "assets/Pipes/Iridium-Intersection.png",       (TILE_SIZE, TILE_SIZE)),
+    (131, "assets/Pipes/Pipe-Intersection.png",          (TILE_SIZE, TILE_SIZE)),
 ]
+
+# set IC_VERBOSE=1 if you need the per-file asset log, otherwise it is 100+
+# lines of noise every launch. broken assets still shout either way
+_VERBOSE_ASSETS = os.environ.get("IC_VERBOSE") == "1"
+_missing_assets = []
 
 for _mid, _rel_path, _size in _image_defs:
     _tried_paths = []
@@ -2089,12 +2045,18 @@ for _mid, _rel_path, _size in _image_defs:
                 if _size:
                     _img = pygame.transform.scale(_img, _size)
                 MACHINE_IMAGES[_mid] = _img
-                print(f"Loaded image {_mid}: {_full_path} -> {_img.get_size()}")
+                if _VERBOSE_ASSETS:
+                    print(f"Loaded image {_mid}: {_full_path} -> {_img.get_size()}")
                 break
             except Exception as _e:
-                print(f"Warning: Error loading {_full_path} for machine {_mid}: {_e}")
+                print(f"Warning: error loading {_full_path} for machine {_mid}: {_e}")
     if _img is None:
-        print(f"Warning: Could not find image for machine {_mid}. Tried: {_tried_paths}")
+        _missing_assets.append((_mid, _rel_path))
+
+if _missing_assets:
+    print(f"Warning: {len(_missing_assets)} machine sprite(s) missing:")
+    for _mid, _rel_path in _missing_assets:
+        print(f"  {_mid}: {_rel_path}")
 
 _img_render_cache: dict = {}
 
@@ -2140,7 +2102,8 @@ if _sheet_path:
                 _sr = pygame.Rect(_mid * _mcell, 0, _mcell, _mcell)
                 if _sr.right <= _msheet.get_width():
                     MACHINE_IMAGES[_mid] = _msheet.subsurface(_sr).copy()
-        print(f"Loaded machine sheet: {_sheet_path} ({_max_idx} cells)")
+        if _VERBOSE_ASSETS:
+            print(f"Loaded machine sheet: {_sheet_path} ({_max_idx} cells)")
     except Exception as _e:
         print(f"Warning: Could not load machines_sheet.png: {_e}")
 
@@ -2261,6 +2224,8 @@ def _step_toward(a, b):
         return (1 if dx > 0 else -1, 0)
     return (0, 1 if dy > 0 else -1)
 
+# links whose target is also inside the box get saved as corner offsets.
+# ones pointing outside get chucked, nothing to hook them to on paste
 def _capture_blueprint(x_lo, y_lo, x_hi, y_hi):
     machines = []
     seen = set()
@@ -2278,20 +2243,29 @@ def _capture_blueprint(x_lo, y_lo, x_hi, y_hi):
             if not (x_lo <= ox_b <= x_hi and y_lo <= oy_b <= y_hi):
                 continue
             ot = grid[oy_b][ox_b]
+            links = []
+            for conn in (ot.get("power_connections") or []):
+                cx, cy = tuple(conn) if isinstance(conn, list) else conn
+                if x_lo <= cx <= x_hi and y_lo <= cy <= y_hi:
+                    links.append([cx - x_lo, cy - y_lo])
             machines.append({"dx": ox_b - x_lo, "dy": oy_b - y_lo,
                              "type": ot["type"], "rotation": ot.get("rotation", 0),
-                             "recipe_mode": ot.get("recipe_mode")})
+                             "recipe_mode": ot.get("recipe_mode"),
+                             "power_links": links})
     if not machines:
         return None
     return {"w": x_hi - x_lo + 1, "h": y_hi - y_lo + 1, "machines": machines}
 
 def _blueprint_cost(bp):
-    return sum(MACHINE_STATS.get(m["type"], {}).get("cost", 0) for m in bp["machines"])
+    from blueprints import BlueprintLibrary
+    return BlueprintLibrary.cost(bp)
 
 def _paste_blueprint(bp, gx, gy):
     global money
     placed = skipped = 0
     spent = 0.0
+    placed_tiles = set()     # blueprint-local tiles a machine actually landed on
+    link_jobs = []           # (world origin, [local link coords]) for pass two
     for m in bp["machines"]:
         ttype = m["type"]
         stats = MACHINE_STATS.get(ttype, {})
@@ -2325,9 +2299,33 @@ def _paste_blueprint(bp, gx, gy):
                     "power_connections": [], "origin": (px_, py_)})
         if m.get("recipe_mode"):
             grid[py_][px_]["recipe_mode"] = m["recipe_mode"]
+        for dy_ in range(h):
+            for dx_ in range(w):
+                placed_tiles.add((m["dx"] + dx_, m["dy"] + dy_))
+        if m.get("power_links"):
+            link_jobs.append(((px_, py_), m["power_links"]))
         placed += 1
+
+    # 2nd pass once everything is down. cant do it in the loop above, a link
+    # might point at something we havent placed yet
+    # only reconnect if the target actually landed - stuff gets skipped if
+    # youre broke or havent researched it
+    for (sox, soy), links in link_jobs:
+        src = grid[soy][sox]
+        conns = src.setdefault("power_connections", [])
+        for link in links:
+            ldx, ldy = tuple(link)
+            if (ldx, ldy) not in placed_tiles:
+                continue
+            target = (gx + ldx, gy + ldy)
+            if not (0 <= target[0] < GRID_WIDTH and 0 <= target[1] < GRID_HEIGHT):
+                continue
+            if target not in conns:
+                conns.append(target)
     return placed, skipped, spent
 
+# world stuff draws on world_surface (gets zoomed), hud goes straight on
+# screen. mix them up and the hud either vanishes or comes out huge
 while run:
     screen.fill(BGC)
 
@@ -2398,6 +2396,57 @@ while run:
                 else:
                     if event.unicode and len(ui.console_input) < 32:
                         ui.console_input += event.unicode
+            elif ui.bp_importing:
+                if event.key == pygame.K_ESCAPE:
+                    ui.bp_importing = False
+                    ui.bp_import_input = ""
+                    ui.bp_message = ""
+                elif event.key == pygame.K_RETURN:
+                    try:
+                        entry = ui.bp_lib.import_string(ui.bp_import_input)
+                        ui.bp_lib_selected = ui.bp_lib.blueprints.index(entry)
+                        ui.bp_message = (f"Imported '{entry['name']}' - "
+                                         f"{len(entry['machines'])} machines")
+                        ui.bp_message_col = (140, 235, 175)
+                        ui.show_transaction_message(
+                            f"Blueprint imported: {entry['name']}", (120, 235, 175))
+                        ui.bp_importing = False
+                        ui.bp_import_input = ""
+                    except ValueError as exc:
+                        ui.bp_message = str(exc)
+                        ui.bp_message_col = (240, 130, 120)
+                elif event.key == pygame.K_BACKSPACE:
+                    ui.bp_import_input = ui.bp_import_input[:-1]
+                elif (event.key == pygame.K_v
+                      and (pygame.key.get_mods() & (pygame.KMOD_CTRL | pygame.KMOD_META))):
+                    from ui import _clipboard_get
+                    pasted = _clipboard_get()
+                    if pasted:
+                        ui.bp_import_input = pasted
+                        ui.bp_message = "Pasted - press ENTER to import"
+                        ui.bp_message_col = (150, 205, 245)
+                    else:
+                        ui.bp_message = "Clipboard is empty"
+                        ui.bp_message_col = (235, 190, 110)
+                else:
+                    if event.unicode and event.unicode.isprintable() and len(ui.bp_import_input) < 4000:
+                        ui.bp_import_input += event.unicode
+            elif ui.bp_naming:
+                if event.key == pygame.K_ESCAPE:
+                    ui.bp_naming = False
+                    ui.bp_name_input = ""
+                elif event.key == pygame.K_RETURN:
+                    if ui.blueprint:
+                        entry = ui.bp_lib.add(ui.bp_name_input or "Blueprint", ui.blueprint)
+                        ui.show_transaction_message(
+                            f"Saved blueprint: {entry['name']}", (120, 255, 160))
+                    ui.bp_naming = False
+                    ui.bp_name_input = ""
+                elif event.key == pygame.K_BACKSPACE:
+                    ui.bp_name_input = ui.bp_name_input[:-1]
+                else:
+                    if event.unicode and event.unicode.isprintable() and len(ui.bp_name_input) < 24:
+                        ui.bp_name_input += event.unicode
             elif ui.build_searching:
                 if event.key == pygame.K_ESCAPE:
                     ui.build_searching = False
@@ -2445,11 +2494,24 @@ while run:
                         ui.show_transaction_message("Blueprint cancelled", (200, 200, 200))
                     elif ui.show_settings_panel:
                         ui.show_settings_panel = False
+                    elif ui.show_blueprint_panel:
+                        ui.show_blueprint_panel = False
+                        ui.bp_naming = False
+                        ui.bp_importing = False
+                        ui.bp_import_input = ""
+                        ui.bp_export_text = ""
+                        ui.bp_message = ""
                     elif ui.show_code_console:
                         ui.show_code_console = False
                         ui.console_input = ""
                     elif ui.show_recipe_book:
                         ui.show_recipe_book = False
+                    elif ui.show_market_panel:
+                        # market was the only one missing off this list. no idea
+                        ui.show_market_panel = False
+                        ui.market_searching = False
+                        ui.market_search = ""
+                        ui.market_scroll = 0
                     elif ui.show_loans_panel:
                         ui.show_loans_panel = False
                     elif ui.show_stats_panel:
@@ -2473,6 +2535,11 @@ while run:
                     ui.show_contracts_panel = False
                     ui.show_research_panel = False
                     ui.show_stats_panel = False
+                    if not ui.show_build_panel:
+                        # clear the search. otherwise the filter is still on next
+                        # time and you swear the machine never unlocked
+                        ui.build_search = ""
+                        ui.build_searching = False
                     if ui.show_build_panel and ui.active_tool == 0:
                         ui.active_tool = -1
                         ui.md_drag_start = None
@@ -2616,7 +2683,7 @@ while run:
                         tgt_type = td.get("type", 0)
                         if tgt_type != clip["type"]:
                             ui.show_transaction_message(
-                                "Type mismatch — can't paste", (235, 95, 95))
+                                "Type mismatch - can't paste", (235, 95, 95))
                         else:
                             raw_o = td.get("origin", (tgx, tgy))
                             ox_p, oy_p = tuple(raw_o) if isinstance(raw_o, list) else raw_o
@@ -2635,6 +2702,17 @@ while run:
                             else:
                                 ui.show_transaction_message(
                                     "Nothing to paste for this type", (200, 150, 100))
+                elif event.key == pygame.K_v:
+                    ui.show_blueprint_panel = not ui.show_blueprint_panel
+                    ui.bp_naming = False
+                    ui.bp_importing = False
+                    ui.bp_import_input = ""
+                    ui.bp_export_text = ""
+                    ui.bp_message = ""
+                    ui.show_build_panel = False
+                    ui.show_contracts_panel = False
+                    ui.show_research_panel = False
+                    ui.show_stats_panel = False
 
         elif event.type == pygame.KEYUP:
             if event.key in (pygame.K_QUESTION, pygame.K_SLASH):
@@ -2676,7 +2754,7 @@ while run:
                                 ui.show_transaction_message(msg, (120, 255, 160))
                             else:
                                 ui.show_transaction_message(
-                                    "Nothing pasted — blocked, locked, or too expensive",
+                                    "Nothing pasted - blocked, locked, or too expensive",
                                     (235, 95, 95))
                         continue
 
@@ -2829,7 +2907,8 @@ while run:
                                         continue
 
                                     power_range = source_stats.get("power_range", 999)
-                                    distance = abs(target_gx - power_source[0]) + abs(target_gy - power_source[1])
+                                    distance = power_link_distance(
+                                        grid, power_source[0], power_source[1], target_gx, target_gy)
 
                                     target_is_pure_source = (
                                         machine_stats.get("type") == "power_source"
@@ -2841,8 +2920,13 @@ while run:
                                     )
 
                                     if distance > power_range:
-                                        ui.show_transaction_message(f"Out of range! (Max: {power_range})", (255, 100, 100))
+                                        ui.show_transaction_message(
+                                            f"Out of range! ({distance} tiles, max {power_range})",
+                                            (255, 100, 100))
                                         play_power_fail_sfx()
+                                        # drop the source or clicking another gen
+                                        # tries to wire A->B instead of picking B
+                                        power_source = None
                                     elif target_is_pure_source and not target_relay_ok:
                                         ui.show_transaction_message(
                                             "Can't wire a generator to another generator.",
@@ -3098,7 +3182,7 @@ while run:
                 ui.bp_paste_mode = True
                 ui.show_transaction_message(
                     f"Blueprint: {len(bp['machines'])} machines "
-                    f"(${_blueprint_cost(bp):,.0f}) — click to paste",
+                    f"(${_blueprint_cost(bp):,.0f}) - click to paste, [V] to save",
                     (120, 200, 255))
             else:
                 ui.show_transaction_message("No machines in selection", (200, 150, 100))
@@ -3131,14 +3215,17 @@ while run:
     camera_velocity_x = 0
     camera_velocity_y = 0
 
-    if keys[pygame.K_w]:
-        camera_velocity_y = camera_speed
-    if keys[pygame.K_s]:
-        camera_velocity_y = -camera_speed
-    if keys[pygame.K_a]:
-        camera_velocity_x = camera_speed
-    if keys[pygame.K_d]:
-        camera_velocity_x = -camera_speed
+    # dont pan while someones typing!! "sand" "steel" "water" all have wasd in
+    # them, camera was flying off across the map mid search
+    if not ui.text_input_active():
+        if keys[pygame.K_w]:
+            camera_velocity_y = camera_speed
+        if keys[pygame.K_s]:
+            camera_velocity_y = -camera_speed
+        if keys[pygame.K_a]:
+            camera_velocity_x = camera_speed
+        if keys[pygame.K_d]:
+            camera_velocity_x = -camera_speed
 
     dt = clock.get_time() / 1000
     dt = min(dt, 0.05)
@@ -3713,85 +3800,18 @@ while run:
                 border_color = (255, 50, 50) if current_tile_occupied else (50, 255, 50)
                 pygame.draw.rect(screen, border_color, hologram_rect, 2)
 
-                from settings import MACHINE_DEFS as _MDEFS
-                mdef_h = _MDEFS.get(tool_to_place, {})
+                mdef_h = MACHINE_DEFS.get(tool_to_place, {})
 
-                def _rot_dir(d, rot):
-                    base = [UP, RIGHT, DOWN, LEFT]
-                    if d not in base: return d
-                    return base[(base.index(d) - (rot // 90)) % 4]
-
-                def _rot_subtile(sx, sy, rot, w, h):
-                    steps = (rot // 90) % 4
-                    cx, cy, cw, ch = sx, sy, w, h
-                    for _ in range(steps):
-                        cx, cy = cy, cw - 1 - cx
-                        cw, ch = ch, cw
-                    return cx, cy
-
+                # Use the exact same rotation math as the receive/push logic
+                # (rotate_direction / rotate_subtile) so the preview arrows
+                # always match where items really flow after placement.
+                # same call as the Z overlay. keep it that way
                 orig_mw, orig_mh = machine_stats.get("size", (1, 1))
                 mw_, mh_ = building_size
-                input_ports_draw  = []
-                output_ports_draw = []
-
-                defs_in = mdef_h.get("input_ports") or []
-                if defs_in:
-                    seen_in = set()
-                    for port in defs_in:
-                        sx_, sy_ = port.get("subtile", (0, 0))
-                        fd_ = tuple(port.get("from_dir", (0, 1)))
-                        rsx, rsy = _rot_subtile(sx_, sy_, building_rotation, orig_mw, orig_mh)
-                        rfd = _rot_dir(fd_, building_rotation)
-                        k_ = (rsx, rsy, rfd)
-                        if k_ not in seen_in:
-                            seen_in.add(k_)
-                            input_ports_draw.append((rsx, rsy, rfd))
-                else:
-                    stat_in = machine_stats.get("input_dirs") or (
-                        [machine_stats["input_dir"]] if machine_stats.get("input_dir") else []
-                    )
-                    for d in stat_in:
-                        rd_ = _rot_dir(tuple(d), building_rotation)
-                        fd_ = (-rd_[0], -rd_[1])
-                        if fd_ not in [x[2] for x in input_ports_draw]:
-                            if rd_ == UP:     csx, csy = mw_ // 2, 0
-                            elif rd_ == DOWN: csx, csy = mw_ // 2, mh_ - 1
-                            elif rd_ == LEFT: csx, csy = 0, mh_ // 2
-                            else:             csx, csy = mw_ - 1, mh_ // 2
-                            input_ports_draw.append((csx, csy, fd_))
-
-                defs_out = []
-                if mdef_h.get("output_port"):  defs_out.append(mdef_h["output_port"])
-                if mdef_h.get("output_port2"): defs_out.append(mdef_h["output_port2"])
-                if defs_out:
-                    seen_out = set()
-                    for op_ in defs_out:
-                        sx_, sy_ = op_.get("subtile", (0, 0))
-                        pd_ = tuple(op_.get("push_dir", (0, 1)))
-                        rsx, rsy = _rot_subtile(sx_, sy_, building_rotation, orig_mw, orig_mh)
-                        rpd = _rot_dir(pd_, building_rotation)
-                        k_ = (rsx, rsy, rpd)
-                        if k_ not in seen_out:
-                            seen_out.add(k_)
-                            output_ports_draw.append((rsx, rsy, rpd))
-                else:
-                    if mdef_h.get("fluid_producer"):
-                        sx_, sy_ = mdef_h.get("output_subtile", (0, 0))
-                        pd_ = tuple(mdef_h.get("push_dir", (0, 1)))
-                        rsx, rsy = _rot_subtile(sx_, sy_, building_rotation, orig_mw, orig_mh)
-                        output_ports_draw.append((rsx, rsy, _rot_dir(pd_, building_rotation)))
-                    else:
-                        stat_out = machine_stats.get("output_dirs") or (
-                            [machine_stats["output_dir"]] if machine_stats.get("output_dir") else []
-                        )
-                        for d in stat_out:
-                            rd_ = _rot_dir(tuple(d), building_rotation)
-                            if rd_ not in [x[2] for x in output_ports_draw]:
-                                if rd_ == UP:     csx, csy = mw_ // 2, 0
-                                elif rd_ == DOWN: csx, csy = mw_ // 2, mh_ - 1
-                                elif rd_ == LEFT: csx, csy = 0, mh_ // 2
-                                else:             csx, csy = mw_ - 1, mh_ // 2
-                                output_ports_draw.append((csx, csy, rd_))
+                _ins, _outs = machine_port_tiles(
+                    ui.active_tool, building_rotation, MACHINE_DEFS, MACHINE_STATS)
+                input_ports_draw  = list(_ins)
+                output_ports_draw = list(_outs)
 
                 hx, hy, hw, hh = hologram_rect
                 tw_px = hw / max(1, mw_)

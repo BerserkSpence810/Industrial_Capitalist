@@ -1,11 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+
+# machines_sheet.png is an optional fallback spritesheet: main.py only loads it
+# if it exists on disk. Listing a missing path in datas aborts the build, so
+# filter the optional single-file entries down to the ones actually present.
+_datas = [('SFX', 'SFX'), ('assets', 'assets'), ('data', 'data'),
+          ('machines_sheet.png', '.'), ('materials_32.png', '.')]
+_datas = [(src, dst) for src, dst in _datas if os.path.exists(src)]
+
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('SFX', 'SFX'), ('assets', 'assets'), ('data', 'data'), ('machines_sheet.png', '.'), ('materials_32.png', '.')],
+    datas=_datas,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

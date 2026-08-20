@@ -131,7 +131,7 @@ CONTRACTS = [
         "description": "Successfully feed liquid metal into an Ingot Molder to transition from raw material to structural bars.",
         "requirements": {"iron_ingot": 20},
         "reward_money": 5000, "reward_rp": 80, "tier": 2,
-        "hint": "Iron Drill → Furnace → Ingot Molder → Van Depot.",
+        "hint": "Iron Drill -> Furnace -> Ingot Molder -> Van Depot.",
     },
     {
         "id": "t2_02_copper_induction",

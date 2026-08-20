@@ -230,6 +230,123 @@ def _fmt_me(v):
     return f"{v:.1f} ME"
 
 
+# %/s out of the air, 0 if not a cleaner. scrubber keeps it in STATS, stack in
+# DEFS, no idea why, cba moving either
+def _machine_scrub_rate(ttype):
+    rate = MACHINE_STATS.get(ttype, {}).get("scrub_rate", 0) or 0
+    if rate:
+        return rate
+    from settings import MACHINE_DEFS as _MD
+    d = _MD.get(ttype, {}) or {}
+    if d.get("exhaust_stack"):
+        return d.get("disperse_rate", 0) or 0
+    return 0
+
+
+# ingredients for machines with no recipe modes. one line per pipe you have to
+# run - raw mill wants 3 separate feeds and used to say that nowhere
+def _machine_requirements(ttype, tile_data=None):
+    from settings import MACHINE_DEFS as _MD
+    d = _MD.get(ttype, {}) or {}
+    proc = d.get("process") or {}
+    if not proc:
+        return []
+    lines = []
+    cur = (tile_data or {}).get("input_item")
+    for bufkey, qty in (proc.get("consume") or {}).items():
+        port = next((p for p in (d.get("input_ports") or []) if p["buf"] == bufkey), None)
+        if port is None:
+            continue
+        items = list(port.get("items") or ([port["item"]] if port.get("item") else []))
+        if proc.get("recipe_map") and cur in items:
+            label = _pretty_item(cur)
+        elif len(items) == 1:
+            label = _pretty_item(items[0])
+        elif len(items) == 2:
+            label = " / ".join(_pretty_item(i) for i in items)
+        elif items:
+            label = _pretty_item(items[0]) + f" (+{len(items)-1} more)"
+        else:
+            label = _pretty_item(bufkey.replace("_buffer", "")) or "Input"
+        lines.append(f"  {label} x{_fmt_qty(qty)}")
+    if proc.get("recipe_map") and cur:
+        v = proc["recipe_map"].get(cur)
+        if v:
+            out = v[0] if isinstance(v, (list, tuple)) else v
+            amt = v[1] if isinstance(v, (list, tuple)) and len(v) > 1 else 1
+            lines.append(f"  -> {_pretty_item(out)} x{_fmt_qty(amt)}")
+    elif proc.get("recipe_map"):
+        lines.append("  output depends on what you feed it")
+    return lines
+
+
+# scrap is flaky on some setups so this must never throw. we write the string
+# to a file as well so it isnt the only copy
+def _clipboard_put(text):
+    if not text:
+        return False
+    try:
+        import pygame.scrap as _scrap
+        if not _scrap.get_init():
+            _scrap.init()
+        _scrap.put_text(text)
+        return True
+    except Exception:
+        return False
+
+
+def _clipboard_get():
+    try:
+        import pygame.scrap as _scrap
+        if not _scrap.get_init():
+            _scrap.init()
+        got = _scrap.get_text()
+        return (got or "").strip()
+    except Exception:
+        return ""
+
+
+def _write_blueprint_string(name, text):
+    import os as _os
+    import re as _re
+    d = _os.path.join("data", "blueprint_strings")
+    _os.makedirs(d, exist_ok=True)
+    safe = _re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("_") or "blueprint"
+    path = _os.path.join(d, safe + ".txt")
+    with open(path, "w") as f:
+        f.write(text + "\n")
+    return path
+
+
+# greedy wrap, panel is 240px and half the status lines are longer than that
+def _wrap_text(font, text, max_w):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if cur and font.size(t)[0] > max_w:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = t
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+# raw_iron -> Raw Iron
+def _pretty_item(name):
+    return name.replace("_", " ").title() if name else ""
+
+
+# %g so 0.5 stays 0.5 and 1 stays 1 not 1.0
+def _fmt_qty(q):
+    try:
+        q = float(q)
+    except (TypeError, ValueError):
+        return str(q)
+    return f"{q:g}"
+
+
 class StatsTracker:
     WINDOW = 60.0
 
@@ -286,11 +403,20 @@ def machine_stall_reason(tile, ttype):
         need = stats.get("power_input", 0)
         return 1.0 if need <= 0 else min(1.0, tile.get("power", 0) / need)
 
+    if mdef.get("scrubber"):
+        cap = (mdef.get("output_port") or {}).get("cap", 8)
+        if tile.get("output_buffer", 0) >= cap - 1e-9:
+            return ("RESIDUE FULL - pipe it to a Liquid Burner", _STALL_BAD)
+        p = _powered()
+        if p <= 0:  return ("NO POWER", _STALL_BAD)
+        if p < 1.0: return (f"LOW POWER ({p*100:.0f}% scrub rate)", _STALL_WARN)
+        return ("RUNNING", _STALL_OK)
+
     if mdef.get("drill"):
         p = _powered()
         if p <= 0:  return ("NO POWER", _STALL_BAD)
         if tile.get("amount", 0) >= stats.get("capacity", 10):
-            return ("OUTPUT FULL — nothing accepts items below", _STALL_BAD)
+            return ("OUTPUT FULL - nothing accepts items below", _STALL_BAD)
         if p < 1.0: return (f"LOW POWER ({p*100:.0f}% speed)", _STALL_WARN)
         return ("RUNNING", _STALL_OK)
 
@@ -298,7 +424,7 @@ def machine_stall_reason(tile, ttype):
         p = _powered()
         if p <= 0:  return ("NO POWER", _STALL_BAD)
         if tile.get("fluid_buffer", 0) >= mdef.get("cap", 10) - 1e-6:
-            return ("TANK FULL — output blocked", _STALL_BAD)
+            return ("TANK FULL - output blocked", _STALL_BAD)
         return ("RUNNING", _STALL_OK)
 
     if mdef.get("diesel_gen"):
@@ -331,7 +457,7 @@ def machine_stall_reason(tile, ttype):
         out_cap = oport.get("cap", 99)
         cur_out = tile.get(out_buf, 0) or 0
         if cur_out >= out_cap - 1e-6:
-            return ("OUTPUT FULL — connect/unblock the output", _STALL_BAD)
+            return ("OUTPUT FULL - connect/unblock the output", _STALL_BAD)
         check = proc.get("check")
         if check:
             try: ok = bool(check(tile))
@@ -346,7 +472,7 @@ def machine_stall_reason(tile, ttype):
                             empty.append(label)
                 if empty:
                     return ("NEEDS " + ", ".join(empty[:3]).upper(), _STALL_BAD)
-                return ("WAITING — check quantities / recipe mode", _STALL_WARN)
+                return ("WAITING - check quantities / recipe mode", _STALL_WARN)
         if proc.get("needs_power"):
             p = _powered()
             if p < 1.0: return (f"LOW POWER ({p*100:.0f}% speed)", _STALL_WARN)
@@ -535,6 +661,13 @@ class DrawGrid:
         self.autosave_flash_duration = 2.0
         self.net_worth_cache      = 0.0
         self.pollution_cache      = 0.0
+        self.stalled_count        = 0
+        self._stall_scan_timer    = 0.0
+        # published every tick by main.update_world -- gross %/s emitted,
+        # gross %/s removed by stacks/scrubbers, and their net.
+        self.pollution_emitted    = 0.0
+        self.pollution_scrubbed   = 0.0
+        self.pollution_net        = 0.0
         self.wind_speed_cache     = 0.5
         self.md_drag_start        = None
         self.md_drag_end          = None
@@ -544,6 +677,28 @@ class DrawGrid:
         self.bp_drag_end          = None
         self.blueprint            = None
         self.bp_paste_mode        = False
+
+        from blueprints import BlueprintLibrary
+        self.bp_lib               = BlueprintLibrary()
+        self.show_blueprint_panel = False
+        self.bp_lib_selected      = None
+        self.bp_naming            = False
+        self.bp_importing         = False
+        self.bp_import_input      = ""
+        self.bp_export_text       = ""
+        self.bp_export_rect       = None
+        self.bp_import_rect       = None
+        self.bp_copy_rect         = None
+        self.bp_message           = ""
+        self.bp_message_col       = (150, 200, 220)
+        self.bp_name_input        = ""
+        self.bp_row_rects         = {}
+        self.bp_place_rect        = None
+        self.bp_delete_rect       = None
+        self.bp_save_rect         = None
+        self.bp_panel_rect        = None
+        self.bp_close_rect        = None
+        self.bp_lib_scroll        = 0
         self.show_bottleneck_overlay = False
         self.shown_milestones     = self._load_milestones()
         self.milestone_message    = None
@@ -560,8 +715,9 @@ class DrawGrid:
         self.buttons = []
 
     def show_transaction_message(self, msg, color):
+        # y=96 clears the PLACING/DELETE banner. was 72, they sat on top of each other
         self.floaters.append({"msg": msg, "color": color,
-                               "x": 110, "y": 72,
+                               "x": 110, "y": 96,
                                "timer": 1.8, "max_timer": 1.8})
 
     def trigger_autosave_flash(self):
@@ -586,6 +742,27 @@ class DrawGrid:
                     mv += ITEM_VALUES.get(stored, 0) * amt
         return money + mv
 
+    # same check [O] uses so the count always matches whats highlighted
+    def count_stalled(self, grid):
+        n = 0
+        seen = set()
+        for y, row in enumerate(grid):
+            for x, tile in enumerate(row):
+                t = tile.get("type", 0)
+                if t == 0:
+                    continue
+                if MACHINE_STATS.get(t, {}).get("size", (1, 1)) != (1, 1):
+                    o = tile.get("origin", (x, y))
+                    o = tuple(o) if isinstance(o, list) else o
+                    if o in seen:
+                        continue
+                    seen.add(o)
+                    tile = grid[o[1]][o[0]]
+                res = machine_stall_reason(tile, t)
+                if res and res[0] not in ("RUNNING", "SELLING"):
+                    n += 1
+        return n
+
     def compute_power_stats(self, grid):
         generated = 0.0; consumed = 0.0; seen = set()
         for y, row in enumerate(grid):
@@ -607,6 +784,8 @@ class DrawGrid:
     def draw(self, screen, money, contracts, building_rotation=0,
              show_zones=False, power_mode=False, debug_mode=False,
              research=None, grid=None, pollution=0.0, wind_speed=0.5):
+        # panels save their button rects on self as they draw and handle_click
+        # reads them after, so a rect is None until the panel has drawn once
 
         self.contracts = contracts
         if research: self.research = research
@@ -618,6 +797,13 @@ class DrawGrid:
 
         self.power_anim_time += clock.get_time() / 1000.0
         dt = clock.get_time() / 1000.0
+
+        # count stalled machines for the HUD alert -- scanning the whole grid is
+        # cheap but pointless every frame, so do it twice a second
+        self._stall_scan_timer -= dt
+        if self._stall_scan_timer <= 0 and self._grid_ref is not None:
+            self._stall_scan_timer = 0.5
+            self.stalled_count = self.count_stalled(self._grid_ref)
 
         self._draw_money_hud(screen, money)
         self._draw_loan_hud(screen)
@@ -644,6 +830,8 @@ class DrawGrid:
             self._draw_loans_panel(screen, money)
         if self.show_market_panel:
             self._draw_market_panel(screen)
+        if self.show_blueprint_panel:
+            self._draw_blueprint_panel(screen, money)
         if self.selected_tile:
             self.draw_info_panel(screen)
         if self.show_keybind_overlay:
@@ -716,6 +904,21 @@ class DrawGrid:
         pygame.draw.rect(screen, (30,36,48), (bar_x, bar_y, bar_w, 3))
         pygame.draw.rect(screen, w_brd, (bar_x, bar_y, int(bar_w*ws), 3))
 
+        # --- idle machines nag --------
+        # [O] is genuinely useful but nobody knows its there so a dead factory
+        # just sits in silence. nag them about it
+        stalled = self.stalled_count
+        if stalled and not self.show_bottleneck_overlay:
+            al = self.tiny_font.render(
+                f"[!]  {stalled} machine{'s' if stalled != 1 else ''} idle - press [O] to see why",
+                True, (250, 190, 90))
+            aw = al.get_width()+18
+            asf = pygame.Surface((aw,20), pygame.SRCALPHA)
+            pygame.draw.rect(asf, (34,24,10,215), (0,0,aw,20), border_radius=6)
+            pygame.draw.rect(asf, (205,150,60), (0,0,aw,20), 1, border_radius=6)
+            ay = by_+bh_+4
+            screen.blit(asf, (wind_bx, ay)); screen.blit(al, (wind_bx+9, ay+2))
+
         if self.active_tool > 0:
             mname = MACHINE_STATS.get(self.active_tool,{}).get("name","")
             mcost = MACHINE_STATS.get(self.active_tool,{}).get("cost",0)
@@ -780,7 +983,7 @@ class DrawGrid:
         screen.blit(dim, (0, 0))
         pygame.draw.rect(screen, (24, 18, 14), (px, py, pw, ph), border_radius=12)
         pygame.draw.rect(screen, (200, 145, 80), (px, py, pw, ph), 2, border_radius=12)
-        screen.blit(self.title_font.render("BANK · LOANS", True, (255, 200, 100)),
+        screen.blit(self.title_font.render("BANK . LOANS", True, (255, 200, 100)),
                     (px + 18, py + 13))
         screen.blit(self.tiny_font.render("[L] / [ESC] Close", True,
                     (130, 110, 90)), (px + pw - 130, py + 15))
@@ -884,7 +1087,7 @@ class DrawGrid:
                 y += 18
 
         y += 6
-        screen.blit(self.tiny_font.render("─── LIFETIME ───", True, (110, 110, 130)),
+        screen.blit(self.tiny_font.render("--- LIFETIME ---", True, (110, 110, 130)),
                     (px + 30, y))
         y += 16
         screen.blit(self.tiny_font.render(
@@ -904,22 +1107,30 @@ class DrawGrid:
 
     def _draw_floaters(self, screen, dt):
         done = []
-        for f in self.floaters:
+        # everything was pinned to one spot so 2 messages at once drew on top of
+        # each other and you couldnt read either. stack em, newest at the anchor
+        live = [f for f in self.floaters if f["timer"] > 0]
+        for slot, f in enumerate(reversed(live)):
             f["timer"] -= dt
             if f["timer"] <= 0: done.append(f); continue
             ratio = f["timer"] / f["max_timer"]
             alpha = int(255 * min(1.0, ratio * 3.0))
-            rise  = int((1.0 - ratio) * 44)
+            # older ones go DOWN not up or they climb into the hud cards
+            rise  = int((1.0 - ratio) * 20) - slot * 17
             txt = self.small_font.render(f["msg"], True, f["color"])
             surf = pygame.Surface(txt.get_size(), pygame.SRCALPHA)
             surf.blit(txt, (0,0)); surf.set_alpha(alpha)
             screen.blit(surf, (f["x"] - surf.get_width()//2, f["y"] - rise))
+        for f in self.floaters:
+            if f["timer"] <= 0 and f not in done:
+                done.append(f)
         for f in done: self.floaters.remove(f)
 
     def _draw_toolbar(self, screen, power_mode, debug_mode):
         protest_active = bool(self.protesters and self.protesters.is_blocking())
         entries = [
             ("B","Build",     self.show_build_panel,              (55,145,240)),
+            ("V","Blueprints",self.show_blueprint_panel,          (95,205,235)),
             ("C","Contracts", self.show_contracts_panel,          (60,150,220)),
             ("T","Research",  self.show_research_panel,           (140,75,245)),
             ("N","Stats",     self.show_stats_panel,              (75,185,215)),
@@ -1060,14 +1271,53 @@ class DrawGrid:
             screen.blit(hint,hint.get_rect(center=g_rect.center))
         div2_y = g_rect.bottom+10
         pygame.draw.line(screen,(36,40,54),(px+10,div2_y),(px+pw-10,div2_y),1)
-        iy = div2_y+12
+
+        # ---- pollution numbers --------
+        # stacks + scrubbers had no readout ANYWHERE so working and broken looked
+        # identical. numbers come straight off update_world's tick totals
+        poy = div2_y+12
+        emit = getattr(self, "pollution_emitted", 0.0)*3600.0
+        scrub = getattr(self, "pollution_scrubbed", 0.0)*3600.0
+        net = getattr(self, "pollution_net", 0.0)*3600.0
+        screen.blit(self.title_font.render("POLLUTION",True,(240,150,90)),(px+16,poy))
+        lvl = self.pollution_cache
+        from settings import get_pollution_income_multiplier as _gpim
+        mult = _gpim(lvl)
+        lvl_col = (120,225,140) if lvl < 50 else ((240,200,80) if lvl < 200 else (240,95,85))
+        screen.blit(self.small_font.render("Level:",True,(115,125,150)),(col_mid+16,poy))
+        screen.blit(self.font.render(f"{lvl:.2f}%",True,lvl_col),(col_mid+62,poy))
+        screen.blit(self.small_font.render(f"income x{mult:.2f}",True,(150,145,140)),(col_mid+150,poy+2))
+        poy += 22
+        rows = [("Emitted", f"+{emit:.3f} %/h", (240,140,90)),
+                ("Scrubbed", f"-{scrub:.3f} %/h", (120,225,180)),
+                ("Net", f"{'+' if net >= 0 else ''}{net:.3f} %/h",
+                 (240,95,85) if net > 0 else ((120,225,140) if net < 0 else (150,158,182)))]
+        rx_ = px+16
+        for lbl, val, col in rows:
+            screen.blit(self.small_font.render(lbl,True,(115,125,150)),(rx_,poy))
+            screen.blit(self.small_font.render(val,True,col),(rx_+72,poy))
+            rx_ += 186
+        poy += 20
+        if scrub <= 0 and emit > 0:
+            hint_p = "No air cleaning installed - research Atmospherics for Scrubbers and Exhaust Stacks."
+        elif net > 0:
+            hint_p = "Pollution still rising - add Exhaust Stacks (passive) or power your Scrubbers."
+        elif emit > 0:
+            hint_p = "Air cleaning is outpacing emissions."
+        else:
+            hint_p = "No pollution sources running."
+        screen.blit(self.tiny_font.render(hint_p,True,(110,105,120)),(px+16,poy))
+
+        div3_y = poy+18
+        pygame.draw.line(screen,(36,40,54),(px+10,div3_y),(px+pw-10,div3_y),1)
+        iy = div3_y+10
         screen.blit(self.title_font.render("ITEMS SOLD / MIN  (60 s rolling avg)",True,(185,192,212)),(px+16,iy)); iy+=22
         ipm = self.stats_tracker.items_per_min()
         if not ipm:
-            screen.blit(self.small_font.render("No sales recorded yet — sell some items at a depot.",True,(60,68,86)),(px+16,iy))
+            screen.blit(self.small_font.render("No sales recorded yet - sell some items at a depot.",True,(60,68,86)),(px+16,iy))
         else:
             max_rate = max(ipm.values()) if ipm else 1.0
-            bar_area = pw-230
+            bar_area = pw-268          # not 230. the "/min" was getting chopped off
             clip_rect = pygame.Rect(px+8, iy-2, pw-16, ph-(iy-py)-28)
             screen.set_clip(clip_rect)
             scroll_y = iy-self.stats_scroll
@@ -1329,6 +1579,228 @@ class DrawGrid:
             screen.blit(tts,(tx_,ty_)); cy_tt=ty_+6
             for surf in rendered: screen.blit(surf,(tx_+8,cy_tt)); cy_tt+=surf.get_height()+2
 
+    def _draw_blueprint_panel(self, screen, money):
+        pw, ph = 720, 520
+        px = (SCREEN_WIDTH-pw)//2; py = (SCREEN_HEIGHT-ph)//2
+        self.bp_panel_rect = pygame.Rect(px, py, pw, ph)
+        mx, my = pygame.mouse.get_pos()
+        dim = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 150)); screen.blit(dim, (0, 0))
+        pygame.draw.rect(screen, (15,17,23), (px,py,pw,ph), border_radius=12)
+        pygame.draw.rect(screen, (48,52,68), (px,py,pw,ph), 1, border_radius=12)
+        pygame.draw.rect(screen, (19,22,30), (px,py,pw,44), border_radius=12)
+        pygame.draw.rect(screen, (44,48,62), (px,py+44,pw,1))
+        ts = self.title_font.render("BLUEPRINT LIBRARY", True, (150,215,240))
+        screen.blit(ts, ts.get_rect(center=(px+pw//2, py+22)))
+        cr = pygame.Rect(px+pw-36, py+10, 26, 24); ch_ = cr.collidepoint(mx,my)
+        pygame.draw.rect(screen, (62,22,22) if ch_ else (38,16,16), cr, border_radius=6)
+        pygame.draw.rect(screen, (215,65,65) if ch_ else (115,45,45), cr, 1, border_radius=6)
+        xs = self.small_font.render("X", True, (238,95,95))
+        screen.blit(xs, xs.get_rect(center=cr.center))
+        self.bp_close_rect = cr
+
+        FOOTER_H = 74
+        lw = 300; lx = px+10; ly = py+52; lh = ph-60-FOOTER_H
+        pygame.draw.rect(screen, (11,13,19), (lx,ly,lw,lh), border_radius=8)
+        pygame.draw.rect(screen, (36,40,54), (lx,ly,lw,lh), 1, border_radius=8)
+        self.bp_row_rects = {}
+        blueprints = self.bp_lib.blueprints
+        if not blueprints:
+            hint = self.small_font.render("No blueprints saved yet", True, (66,74,92))
+            screen.blit(hint, hint.get_rect(center=(lx+lw//2, ly+lh//2-12)))
+            hint2 = self.tiny_font.render("Press [G], drag over machines, then save here", True, (52,58,74))
+            screen.blit(hint2, hint2.get_rect(center=(lx+lw//2, ly+lh//2+8)))
+        else:
+            ROW = 46
+            clip = pygame.Rect(lx, ly, lw, lh); screen.set_clip(clip)
+            max_scroll = max(0, len(blueprints)*(ROW+4)+8 - lh)
+            self.bp_lib_max_scroll = max_scroll
+            self.bp_lib_scroll = max(0, min(self.bp_lib_scroll, max_scroll))
+            ry = ly+6 - self.bp_lib_scroll
+            for i, bp in enumerate(blueprints):
+                r = pygame.Rect(lx+6, ry, lw-12, ROW)
+                self.bp_row_rects[i] = r
+                sel = (i == self.bp_lib_selected)
+                hov = r.collidepoint(mx,my) and clip.collidepoint(mx,my)
+                bg = (20,34,42) if sel else ((24,28,38) if hov else (16,19,26))
+                brd = (95,205,235) if sel else ((70,78,96) if hov else (36,40,54))
+                pygame.draw.rect(screen, bg, r, border_radius=6)
+                pygame.draw.rect(screen, brd, r, 2 if sel else 1, border_radius=6)
+                name_s = self.small_font.render(bp["name"][:26], True,
+                                                (200,230,245) if sel else (160,170,195))
+                screen.blit(name_s, (r.x+10, r.y+6))
+                cost = self.bp_lib.cost(bp)
+                meta = f"{bp['w']}x{bp['h']}  |  {len(bp['machines'])} machines  |  ${cost:,.0f}"
+                meta_s = self.tiny_font.render(meta, True, (90,120,135) if sel else (78,86,106))
+                screen.blit(meta_s, (r.x+10, r.y+26))
+                ry += ROW+4
+            screen.set_clip(None)
+
+        rx = lx+lw+12; rw = pw-lw-32; ry0 = py+52; rh = lh
+        pygame.draw.rect(screen, (11,13,19), (rx,ry0,rw,rh), border_radius=8)
+        pygame.draw.rect(screen, (36,40,54), (rx,ry0,rw,rh), 1, border_radius=8)
+        self.bp_place_rect = None
+        self.bp_delete_rect = None
+        if self.bp_lib_selected is not None and self.bp_lib_selected < len(blueprints):
+            bp = blueprints[self.bp_lib_selected]
+            nm = self.title_font.render(bp["name"][:30], True, (210,235,248))
+            screen.blit(nm, (rx+14, ry0+10))
+
+            # thumbnail: machines drawn as coloured cells on a mini grid
+            tv_w, tv_h = rw-28, rh-150
+            cell = max(3, min(18, tv_w // max(1, bp["w"]), tv_h // max(1, bp["h"])))
+            gw, gh = cell*bp["w"], cell*bp["h"]
+            gx0 = rx+14 + (tv_w-gw)//2; gy0 = ry0+38 + (tv_h-gh)//2
+            pygame.draw.rect(screen, (8,10,14), (gx0-4, gy0-4, gw+8, gh+8), border_radius=4)
+            pygame.draw.rect(screen, (30,34,46), (gx0-4, gy0-4, gw+8, gh+8), 1, border_radius=4)
+            for m in bp["machines"]:
+                mt = m["type"]
+                w_, h_ = MACHINE_STATS.get(mt, {}).get("size", (1,1))
+                if m.get("rotation", 0) % 180 != 0:
+                    w_, h_ = h_, w_
+                cellr = pygame.Rect(gx0+m["dx"]*cell, gy0+m["dy"]*cell, w_*cell, h_*cell)
+                col = MACHINE_TYPES.get(mt, (60,64,80))
+                if mt in MACHINE_IMAGES and cell >= 6:
+                    try:
+                        img = MACHINE_IMAGES[mt]
+                        im = pygame.transform.scale(img, (cellr.w, cellr.h))
+                        if m.get("rotation", 0):
+                            im = pygame.transform.rotate(im, m["rotation"])
+                        screen.blit(im, cellr)
+                    except Exception:
+                        pygame.draw.rect(screen, col, cellr)
+                else:
+                    pygame.draw.rect(screen, col, cellr)
+                pygame.draw.rect(screen, (20,24,32), cellr, 1)
+
+            cost = self.bp_lib.cost(bp)
+            afford = cost <= money
+            cs = self.small_font.render(f"Build cost: ${cost:,.0f}", True,
+                                        (100,220,120) if afford else (225,90,90))
+            screen.blit(cs, (rx+14, ry0+rh-134))
+
+            eb = pygame.Rect(rx+14, ry0+rh-106, rw-28, 26)
+            hov_e = eb.collidepoint(mx,my)
+            pygame.draw.rect(screen, (30,52,44) if hov_e else (20,36,30), eb, border_radius=7)
+            pygame.draw.rect(screen, (90,205,150), eb, 1, border_radius=7)
+            et = self.small_font.render("EXPORT STRING", True, (150,235,190))
+            screen.blit(et, et.get_rect(center=eb.center))
+            self.bp_export_rect = eb
+
+            pb = pygame.Rect(rx+14, ry0+rh-66, (rw-40)//2, 34)
+            hov_p = pb.collidepoint(mx,my)
+            pygame.draw.rect(screen, (24,66,86) if hov_p else (18,48,62), pb, border_radius=8)
+            pygame.draw.rect(screen, (95,205,235), pb, 2, border_radius=8)
+            pt = self.font.render("PLACE", True, (165,230,250))
+            screen.blit(pt, pt.get_rect(center=pb.center))
+            self.bp_place_rect = pb
+
+            db = pygame.Rect(pb.right+12, pb.y, (rw-40)//2, 34)
+            hov_d = db.collidepoint(mx,my)
+            pygame.draw.rect(screen, (66,24,24) if hov_d else (44,18,18), db, border_radius=8)
+            pygame.draw.rect(screen, (205,75,75), db, 1, border_radius=8)
+            dt2 = self.font.render("DELETE", True, (235,130,130))
+            screen.blit(dt2, dt2.get_rect(center=db.center))
+            self.bp_delete_rect = db
+        else:
+            self.bp_export_rect = None
+            hint = self.small_font.render("Select a blueprint", True, (56,62,78))
+            screen.blit(hint, hint.get_rect(center=(rx+rw//2, ry0+rh//2)))
+
+        # footer: clipboard save / import / export string
+        fy = py+ph-FOOTER_H+6
+        pygame.draw.rect(screen, (13,15,21), (px+10, fy, pw-20, FOOTER_H-16), border_radius=8)
+        pygame.draw.rect(screen, (36,40,54), (px+10, fy, pw-20, FOOTER_H-16), 1, border_radius=8)
+        self.bp_save_rect = None
+        self.bp_import_rect = None
+        self.bp_copy_rect = None
+        if self.bp_export_text and not self.bp_naming and not self.bp_importing:
+            lbl = self.small_font.render("String:", True, (140,225,180))
+            screen.blit(lbl, (px+24, fy+20))
+            ib = pygame.Rect(px+84, fy+14, pw-260, 28)
+            pygame.draw.rect(screen, (16,24,20), ib, border_radius=5)
+            pygame.draw.rect(screen, (80,190,140), ib, 1, border_radius=5)
+            shown = self.bp_export_text
+            while shown and self.tiny_font.size(shown)[0] > ib.w-16:
+                shown = shown[:-1]
+            if shown != self.bp_export_text:
+                shown = shown[:-1] + "\u2026"
+            screen.blit(self.tiny_font.render(shown, True, (170,235,200)), (ib.x+8, ib.y+8))
+            cb = pygame.Rect(ib.right+10, fy+14, 74, 28)
+            hov_c = cb.collidepoint(mx,my)
+            pygame.draw.rect(screen, (30,58,46) if hov_c else (20,40,32), cb, border_radius=6)
+            pygame.draw.rect(screen, (90,205,150), cb, 1, border_radius=6)
+            ct = self.tiny_font.render("COPY", True, (150,235,190))
+            screen.blit(ct, ct.get_rect(center=cb.center))
+            self.bp_copy_rect = cb
+            db2 = pygame.Rect(cb.right+8, fy+14, 66, 28)
+            pygame.draw.rect(screen, (34,34,44), db2, border_radius=6)
+            pygame.draw.rect(screen, (90,96,116), db2, 1, border_radius=6)
+            screen.blit(self.tiny_font.render("CLOSE", True, (170,178,200)),
+                        self.tiny_font.render("CLOSE", True, (170,178,200)).get_rect(center=db2.center))
+            self.bp_import_rect = db2      # doubles as the dismiss target
+        elif self.bp_importing:
+            lbl = self.small_font.render("Paste:", True, (150,215,240))
+            screen.blit(lbl, (px+24, fy+20))
+            ib = pygame.Rect(px+84, fy+14, pw-180, 28)
+            pygame.draw.rect(screen, (20,22,30), ib, border_radius=5)
+            pygame.draw.rect(screen, (95,205,235), ib, 1, border_radius=5)
+            cursor = "_" if int(self.power_anim_time*2) % 2 == 0 else " "
+            shown = self.bp_import_input
+            while shown and self.tiny_font.size(shown + cursor)[0] > ib.w-16:
+                shown = shown[1:]
+            screen.blit(self.tiny_font.render(shown + cursor, True, (200,230,245)),
+                        (ib.x+8, ib.y+8))
+            hint = self.tiny_font.render("[Ctrl/Cmd+V] paste  [ENTER] import  [ESC] cancel",
+                                         True, (78,86,106))
+            screen.blit(hint, (px+24, fy+46))
+        elif self.bp_naming:
+            lbl = self.small_font.render("Name:", True, (150,215,240))
+            screen.blit(lbl, (px+24, fy+20))
+            ib = pygame.Rect(px+80, fy+14, 380, 28)
+            pygame.draw.rect(screen, (20,22,30), ib, border_radius=5)
+            pygame.draw.rect(screen, (95,205,235), ib, 1, border_radius=5)
+            cursor = "_" if int(self.power_anim_time*2) % 2 == 0 else " "
+            nt = self.small_font.render(self.bp_name_input + cursor, True, (200,230,245))
+            screen.blit(nt, (ib.x+8, ib.y+6))
+            hint = self.tiny_font.render("[ENTER] save   [ESC] cancel", True, (78,86,106))
+            screen.blit(hint, (ib.right+14, fy+22))
+        elif self.blueprint:
+            n = len(self.blueprint.get("machines", []))
+            info = self.small_font.render(
+                f"Clipboard: {n} machines ({self.blueprint['w']}x{self.blueprint['h']})",
+                True, (150,200,220))
+            screen.blit(info, (px+24, fy+20))
+            sb = pygame.Rect(px+pw-190, fy+12, 166, 32)
+            hov_s = sb.collidepoint(mx,my)
+            pygame.draw.rect(screen, (24,66,50) if hov_s else (16,46,34), sb, border_radius=8)
+            pygame.draw.rect(screen, (70,205,130), sb, 1, border_radius=8)
+            st2 = self.small_font.render("SAVE CLIPBOARD", True, (140,235,175))
+            screen.blit(st2, st2.get_rect(center=sb.center))
+            self.bp_save_rect = sb
+            ib3 = pygame.Rect(sb.x-176, fy+12, 166, 32)
+            hov_i3 = ib3.collidepoint(mx,my)
+            pygame.draw.rect(screen, (24,44,66) if hov_i3 else (16,30,46), ib3, border_radius=8)
+            pygame.draw.rect(screen, (95,175,235), ib3, 1, border_radius=8)
+            it3 = self.small_font.render("IMPORT STRING", True, (150,205,245))
+            screen.blit(it3, it3.get_rect(center=ib3.center))
+            self.bp_import_rect = ib3
+        else:
+            ib2 = pygame.Rect(px+pw-190, fy+12, 166, 32)
+            hov_i = ib2.collidepoint(mx,my)
+            pygame.draw.rect(screen, (24,44,66) if hov_i else (16,30,46), ib2, border_radius=8)
+            pygame.draw.rect(screen, (95,175,235), ib2, 1, border_radius=8)
+            it2 = self.small_font.render("IMPORT STRING", True, (150,205,245))
+            screen.blit(it2, it2.get_rect(center=ib2.center))
+            self.bp_import_rect = ib2
+            info = self.tiny_font.render(
+                "Clipboard empty - press [G] and drag over machines in the world to capture a layout",
+                True, (78,86,106))
+            screen.blit(info, (px+24, fy+22))
+        if self.bp_message:
+            ms = self.tiny_font.render(self.bp_message, True, self.bp_message_col)
+            screen.blit(ms, (px+24, py+ph-18))
+
     def _stat_lines(self,mid,ms_):
         out=[]
         if ms_.get("power_output",0)>0:
@@ -1379,7 +1851,9 @@ class DrawGrid:
         pygame.draw.line(screen,(42,46,62),(px+16,py+40),(px+pw-16,py+40),1)
         bindings=[("B","Build panel"),("C","Contracts"),("T","Research / Confirm place"),
                   ("N","Statistics panel"),("K","Recipe Book"),
-                  ("P","Toggle Power mode"),("X","Toggle Delete mode"),("Z","Debug view"),
+                  ("P","Toggle Power mode"),("X","Toggle Delete mode"),("Z","Ports / debug view"),
+                  ("O","Idle-machine overlay"),("V","Blueprints"),("G","Capture blueprint"),
+                  ("M","Market"),("L","Loans"),
                   ("R","Rotate building"),("ESC","Close panel / cancel tool"),
                   ("Ctrl+S","Manual save"),("WASD","Pan camera"),("Scroll","Zoom")]
         y_=py+52
@@ -1511,7 +1985,7 @@ class DrawGrid:
         pygame.draw.rect(panel,(95,145,250,255),(0,0,pw,ph),2,border_radius=16)
         screen.blit(panel,(px,py))
         title=self.title_font.render("RECIPE BOOK",True,(155,205,255)); screen.blit(title,title.get_rect(center=(px+pw//2,py+22)))
-        sub=self.tiny_font.render("Click a material to view recipes  ·  K or ESC to close",True,(85,108,150)); screen.blit(sub,sub.get_rect(center=(px+pw//2,py+44)))
+        sub=self.tiny_font.render("Click a material to view recipes  .  K or ESC to close",True,(85,108,150)); screen.blit(sub,sub.get_rect(center=(px+pw//2,py+44)))
         pygame.draw.line(screen,(42,58,92),(px+20,py+62),(px+pw-20,py+62),1)
         sb_w,sb_h=260,24; sb_x=px+24; sb_y=py+74
         self.rb_search_rect=pygame.Rect(sb_x,sb_y,sb_w,sb_h)
@@ -1608,7 +2082,7 @@ class DrawGrid:
         sy=dy_+hdr_h+14; screen.blit(self.small_font.render("Sources",True,(180,200,235)),(dx_,sy)); sy+=20
         recipes=self.rb_recipe_index.get(mat,[])
         if not recipes:
-            screen.blit(self.tiny_font.render("No known recipe — extract or purchase.",True,(100,115,145)),(dx_,sy)); return
+            screen.blit(self.tiny_font.render("No known recipe - extract or purchase.",True,(100,115,145)),(dx_,sy)); return
         row_right_limit=dx_+hdr_w-4
         for rec in recipes:
             row_h2=48; row_w=hdr_w
@@ -1692,7 +2166,7 @@ class DrawGrid:
             line1 = self.small_font.render(pretty, True, (245, 245, 255))
             sell_color = (110, 240, 130) if sell >= 0 else (255, 100, 100)
             sell_text = f"${sell:,.2f}" if abs(sell) < 10000 else f"${sell:,.0f}"
-            line2 = self.tiny_font.render(f"Sells {sell_text}   {rp_v}× RP",
+            line2 = self.tiny_font.render(f"Sells {sell_text}   {rp_v}x RP",
                                           True, sell_color)
             tw = max(line1.get_width(), line2.get_width()) + 16
             th = line1.get_height() + line2.get_height() + 12
@@ -1711,7 +2185,7 @@ class DrawGrid:
     def _draw_keybind_overlay(self,screen):
         bindings=[("B","Build panel"),("C","Contracts"),("T","Research / Confirm place"),
                   ("N","Statistics panel"),("M","Market prices (S&D)"),("P","Power mode"),
-                  ("X","Delete mode"),("Z","Debug view"),
+                  ("X","Delete mode"),("Z","Debug view"),("V","Blueprint library"),
                   ("O","Bottleneck overlay"),("G","Blueprint copy/paste"),
                   ("R","Rotate building"),("`","Code console"),("Fn","Settings"),("?","This cheatsheet (hold)"),
                   ("",""),("Ctrl+S","Manual save"),("Ctrl+C","Copy machine settings"),
@@ -1744,12 +2218,28 @@ class DrawGrid:
         if not self.selected_tile: return
         tile_data,gx,gy=self.selected_tile; tile_type=tile_data["type"]
         if tile_type==0: return
-        pw=240; ph=min(360,SCREEN_HEIGHT-20); panel_x=SCREEN_WIDTH-pw-10; panel_y=10
+        pw=240
+        # was hardcoded 360 and anything with a few modes + buffers painted its
+        # text out over the grass. work the height out from whats in it.
+        # clipping as well bc i dont trust my own maths here
+        _mdef_h = MACHINE_DEFS.get(tile_type, {}) or {}
+        _proc_h = _mdef_h.get("process", {}) or {}
+        _extra = 0
+        _extra += 23 * len(_proc_h.get("mode_recipes") or {})
+        _extra += 12 * max((len(r.get("inputs") or [])
+                            for r in (_proc_h.get("mode_recipes") or {}).values()),
+                           default=0)
+        _extra += 24 * len({p["buf"] for p in (_mdef_h.get("input_ports") or [])})
+        _extra += 26 * bool(_mdef_h.get("output_port")) + 26 * bool(_mdef_h.get("output_port2"))
+        _extra += 60 * (tile_type == 16)
+        ph=min(SCREEN_HEIGHT-20, max(300, 300+_extra))
+        panel_x=SCREEN_WIDTH-pw-10; panel_y=10
         self.info_panel_rect=pygame.Rect(panel_x,panel_y,pw,ph)
         s=pygame.Surface((pw,ph),pygame.SRCALPHA)
         pygame.draw.rect(s,(13,15,21,220),(0,0,pw,ph),border_radius=8)
         pygame.draw.rect(s,(48,52,68,255),(0,0,pw,ph),1,border_radius=8)
         screen.blit(s,(panel_x,panel_y))
+        screen.set_clip(pygame.Rect(panel_x,panel_y,pw,ph))
         mi=MACHINE_STATS.get(tile_type,{}); mn=mi.get("name","Unknown"); mc=mi.get("cost",0)
         y=panel_y+10
         if tile_type!=16: self.recipe_btn_rects={}
@@ -1764,15 +2254,53 @@ class DrawGrid:
             screen.blit(self.tiny_font.render(f"Size: {_sz[0]}x{_sz[1]}",True,(135,148,175)),(panel_x+10,y)); y+=14
         from settings import POLLUTION_PER_MACHINE as _PPM
         _pol = _PPM.get(tile_type, 0)
+        _clean = _machine_scrub_rate(tile_type)
         if _pol > 0:
             screen.blit(self.tiny_font.render(f"Pollution: +{_pol*3600:.3f}%/h",True,(235,140,90)),(panel_x+10,y)); y+=14
+        elif _clean > 0:
+            _live = tile_data.get("scrubbing")
+            if _live is None:
+                _live = _clean if tile_type == 110 else 0.0
+            _active = _live > 1e-9
+            screen.blit(self.title_font.render("AIR SCRUBBING",True,(120,225,235)),(panel_x+10,y)); y+=18
+            screen.blit(self.tiny_font.render(
+                f"Removing: -{_live*3600:.3f}%/h", True,
+                (120,235,160) if _active else (150,150,160)),(panel_x+10,y)); y+=13
+            screen.blit(self.tiny_font.render(
+                f"Rated:    -{_clean*3600:.3f}%/h", True,(120,130,155)),(panel_x+10,y)); y+=13
+            if tile_type == 110:
+                screen.blit(self.tiny_font.render(
+                    "Passive - needs no power, makes no waste.",True,(120,190,140)),
+                    (panel_x+10,y)); y+=13
+            elif _active:
+                screen.blit(self.tiny_font.render(
+                    "ACTIVE",True,(120,235,160)),(panel_x+10,y)); y+=13
+            elif tile_data.get("output_buffer", 0) >= (
+                    (MACHINE_DEFS.get(tile_type, {}).get("output_port") or {}).get("cap", 8)) - 1e-9:
+                for _l in _wrap_text(self.tiny_font,
+                                     "BLOCKED - residue is full. Pipe it out "
+                                     "(a Liquid Burner disposes of it).", pw-24):
+                    screen.blit(self.tiny_font.render(_l,True,(245,150,90)),
+                                (panel_x+10,y)); y+=12
+            else:
+                screen.blit(self.tiny_font.render(
+                    "IDLE - needs full power to scrub.",True,(245,150,90)),(panel_x+10,y)); y+=13
+            if tile_type == 21:
+                _rr = MACHINE_STATS.get(21, {}).get("residue_rate", 0)
+                screen.blit(self.tiny_font.render(
+                    f"Makes {_rr*60:.1f} residue/min",True,(200,170,140)),
+                    (panel_x+10,y)); y+=13
+            y+=4
         elif tile_type in (11, 24, 25, 26, 27, 28):
             screen.blit(self.tiny_font.render("Pollution: 0 (clean)",True,(120,230,140)),(panel_x+10,y)); y+=14
         _stall = machine_stall_reason(tile_data, tile_type)
         if _stall:
             _stxt, _scol = _stall
             pygame.draw.circle(screen, _scol, (panel_x+16, y+8), 4)
-            screen.blit(self.small_font.render(_stxt, True, _scol), (panel_x+26, y)); y += 18
+            for _line in _wrap_text(self.small_font, _stxt, pw-36):
+                screen.blit(self.small_font.render(_line, True, _scol), (panel_x+26, y))
+                y += 15
+            y += 3
         y += 4
         if mi.get("power_output",0)>0 or mi.get("power_input",0)>0 or mi.get("power_capacity",0)>0:
             screen.blit(self.title_font.render("POWER",True,(250,194,45)),(panel_x+10,y)); y+=18
@@ -1796,6 +2324,42 @@ class DrawGrid:
             if mi.get("power_input",0)>0: screen.blit(self.tiny_font.render(f"Needs: {_fmt_me(mi['power_input'])}/s",True,(252,172,70)),(panel_x+10,y)); y+=14
             if tile_data.get("power_connections"): screen.blit(self.tiny_font.render(f"Connections: {len(tile_data['power_connections'])}",True,(135,190,252)),(panel_x+10,y)); y+=14
             y+=4
+        if tile_type == 13 and self.research is not None:
+            import math as _m
+            n_active = 0
+            if self._grid_ref:
+                seen13 = set()
+                for _y13, _row13 in enumerate(self._grid_ref):
+                    for _x13, _t13 in enumerate(_row13):
+                        if _t13.get("type") != 13:
+                            continue
+                        _o13 = _t13.get("origin", (_x13, _y13))
+                        _o13 = tuple(_o13) if isinstance(_o13, list) else _o13
+                        if _o13 in seen13:
+                            continue
+                        seen13.add(_o13)
+                        if self._grid_ref[_o13[1]][_o13[0]].get("power", 0) > 1e-3:
+                            n_active += 1
+            cap = 200.0 * _m.log2(n_active + 1) if n_active else 0.0
+            rp = self.research.rp
+            screen.blit(self.title_font.render("RESEARCH", True, (185,192,212)),
+                        (panel_x+10, y)); y += 18
+            screen.blit(self.tiny_font.render(
+                f"{n_active} station{'s' if n_active != 1 else ''} running  "
+                f"->  {0.5*n_active:.1f} RP/s", True, (165,174,202)),
+                (panel_x+10, y)); y += 13
+            at_cap = cap > 0 and rp >= cap - 1e-6
+            screen.blit(self.tiny_font.render(
+                f"RP cap: {rp:.0f} / {cap:.0f}", True,
+                (245,150,90) if at_cap else (150,175,205)), (panel_x+10, y)); y += 13
+            if at_cap:
+                for _l in _wrap_text(self.tiny_font,
+                                     "Cap reached - build another station to raise "
+                                     "it, or move up to Research Station 2.", pw-24):
+                    screen.blit(self.tiny_font.render(_l, True, (245,150,90)),
+                                (panel_x+10, y)); y += 12
+            y += 6
+
         if tile_type in (3, 83, 85, 51, 84):
             hdr = self.title_font.render("DEPOT", True, (130, 220, 140))
             screen.blit(hdr, (panel_x + 10, y)); y += 18
@@ -1866,8 +2430,8 @@ class DrawGrid:
             hdr = self.title_font.render("LANES", True, (140, 200, 255))
             screen.blit(hdr, (panel_x + 10, y)); y += 18
             btn_w, btn_h = pw - 20, 22
-            for lane_key, lane_label in (("lane_v", "Vertical  (↑↓)"),
-                                          ("lane_h", "Horizontal (←→)")):
+            for lane_key, lane_label in (("lane_v", "Vertical  (^v)"),
+                                          ("lane_h", "Horizontal (<-->)")):
                 enabled = tile_data.get(f"{lane_key}_enabled", True)
                 amt     = tile_data.get(f"{lane_key}_amount", 0)
                 stored  = tile_data.get(f"{lane_key}_stored")
@@ -1936,16 +2500,42 @@ class DrawGrid:
                         pygame.draw.rect(screen,(32,42,52) if active else (22,22,28),r,border_radius=4)
                         pygame.draw.rect(screen,(100,160,230) if active else (55,60,72),r,1,border_radius=4)
                         tc=(160,210,255) if active else (110,115,130)
-                        out_item=mr[rkey].get("produce",rkey)
-                        label=f"{rkey.replace('_',' ').title()} → {out_item.replace('_',' ').title()}"
+                        # label = what it MAKES. mode key is named after the
+                        # output so the old "<key> -> <produce>" was printing
+                        # "Clay Bricks -> Clay Bricks". great
+                        rec=mr[rkey]
+                        out_item=rec.get("produce",rkey)
+                        amt=rec.get("amount",1)
+                        label=_pretty_item(out_item)
+                        if amt and amt != 1: label += f" x{_fmt_qty(amt)}"
                         ts=self.small_font.render(label,True,tc); screen.blit(ts,(panel_x+20,y+3)); y+=btn_h+3
+                    # ingredients for whichever mode is selected, under the buttons
+                    sel=mr.get(cur_mode) or mr.get(proc.get("default_mode")) or next(iter(mr.values()))
+                    ins=sel.get("inputs") or []
+                    if ins:
+                        screen.blit(self.tiny_font.render("Needs:",True,(120,150,190)),(panel_x+10,y)); y+=12
+                        for iname,iqty in ins:
+                            screen.blit(self.tiny_font.render(
+                                f"  {_pretty_item(iname)} x{_fmt_qty(iqty)}",True,(150,175,205)),
+                                (panel_x+10,y)); y+=12
                     y+=6
+                elif proc.get("recipe_map") or proc.get("consume") or proc.get("outputs"):
+                    # recipe_map and fixed-recipe machines had no ingredient list
+                    # at all, which is exactly where players get stuck: several
+                    # of them want two or three separate input lines.
+                    need = _machine_requirements(tile_type, tile_data)
+                    if need:
+                        screen.blit(self.title_font.render("NEEDS",True,(185,192,212)),(panel_x+10,y)); y+=16
+                        for line in need:
+                            screen.blit(self.tiny_font.render(line,True,(150,175,205)),
+                                        (panel_x+10,y)); y+=12
+                        y+=6
             if mdef and ("input_ports" in mdef or "output_port" in mdef) and not mdef.get("fluid_producer") and not mdef.get("diesel_gen"):
                 if tile_type==16:
                     from settings import REFINERY_RECIPES
                     screen.blit(self.title_font.render("RECIPE",True,(185,192,212)),(panel_x+10,y)); y+=16
                     cur_mode=tile_data.get("recipe_mode"); self.recipe_btn_rects={}
-                    recipes=[("crude_oil","Crude → PQD"),("poor_quality_diesel","PQD → Diesel"),("diesel","Diesel → Rfnd")]
+                    recipes=[("crude_oil","Crude -> PQD"),("poor_quality_diesel","PQD -> Diesel"),("diesel","Diesel -> Rfnd")]
                     btn_w=pw-20; btn_h=20
                     for rkey,rlabel in recipes:
                         r=pygame.Rect(panel_x+10,y,btn_w,btn_h); self.recipe_btn_rects[rkey]=r
@@ -1966,6 +2556,10 @@ class DrawGrid:
                         return _pretty(port["item"])
                     items = port.get("items") or []
                     if items:
+                        # 240px panel. a port that takes 6 items ran the
+                        # label clean off the side
+                        if len(items) > 2:
+                            return f"{_pretty(items[0])} +{len(items)-1} more"
                         return " / ".join(_pretty(i) for i in items)
                     buf_name = port.get("buf", "")
                     if buf_name.endswith("_buffer"):
@@ -2000,12 +2594,18 @@ class DrawGrid:
                             label2 = _pretty(proc["produce"])
                         elif proc.get("recipe_map"):
                             outs = sorted({v[0] for v in proc["recipe_map"].values() if isinstance(v, tuple) and v})
-                            label2 = " / ".join(_pretty(o) for o in outs) if outs else "—"
+                            if len(outs) > 2:
+                                label2 = f"{_pretty(outs[0])} +{len(outs)-1}"
+                            else:
+                                label2 = " / ".join(_pretty(o) for o in outs) if outs else "-"
                         elif proc.get("mode_recipes"):
                             outs = sorted({m.get("produce", "") for m in proc["mode_recipes"].values() if m.get("produce")})
-                            label2 = " / ".join(_pretty(o) for o in outs) if outs else "—"
+                            if len(outs) > 2:
+                                label2 = f"{_pretty(outs[0])} +{len(outs)-1}"
+                            else:
+                                label2 = " / ".join(_pretty(o) for o in outs) if outs else "-"
                         else:
-                            label2 = "—"
+                            label2 = "-"
                     col=(100,235,110) if buf_val>0 else (90,95,115)
                     screen.blit(self.small_font.render(f"Out ({label2}): {buf_val:.2f}/{buf_cap}",True,col),(panel_x+10,y)); y+=15
                     bw_=pw-20; bh_=6
@@ -2037,7 +2637,7 @@ class DrawGrid:
                         from settings import REFINERY_RECIPES
                         recipe=REFINERY_RECIPES.get(in_item)
                         if recipe:
-                            screen.blit(self.tiny_font.render(f"{in_item.replace('_',' ').title()} → {recipe['produce'].replace('_',' ').title()}",True,th_[4]),(panel_x+10,y)); y+=13
+                            screen.blit(self.tiny_font.render(f"{in_item.replace('_',' ').title()} -> {recipe['produce'].replace('_',' ').title()}",True,th_[4]),(panel_x+10,y)); y+=13
                     screen.blit(self.title_font.render("PROCESSING",True,(185,192,212)),(panel_x+10,y)); y+=14
                     bw_=pw-20; bh_=10
                     pygame.draw.rect(screen,(20,20,24),(panel_x+10,y,bw_,bh_),border_radius=3)
@@ -2073,8 +2673,11 @@ class DrawGrid:
                     out_me=DIESEL_GEN_OUTPUT.get(fitem,0)
                     screen.blit(self.tiny_font.render(f"Output: {_fmt_me(out_me)}/s  |  Burn: 0.1/s",True,(165,175,200)),(panel_x+10,y)); y+=13
             else:
-                screen.blit(self.title_font.render("STORAGE",True,(185,192,212)),(panel_x+10,y)); y+=18
                 stored=tile_data.get("stored",None); amount=tile_data.get("amount",0); cap=mi.get("capacity",0)
+                # only draw the header if theres anything under it. poles and
+                # stacks had a lonely "STORAGE" title sat over nothing
+                if cap or (stored and amount>0) or tile_type in (2,8,3):
+                    screen.blit(self.title_font.render("STORAGE",True,(185,192,212)),(panel_x+10,y)); y+=18
                 if cap:
                     screen.blit(self.small_font.render(f"{stored or 'Empty'}: {amount}/{cap}",True,th_[4]),(panel_x+10,y)); y+=16
                 if stored and amount>0:
@@ -2101,7 +2704,7 @@ class DrawGrid:
             y += 6
             screen.blit(self.title_font.render("SIGNAL GATE", True, (80, 255, 200)), (panel_x+10, y)); y += 18
             gtype_s = _mdef_g.get("gate_type", "?")
-            gout = tile_data.get("gate_output", "—")
+            gout = tile_data.get("gate_output", "-")
             ginputs = tile_data.get("signal_inputs", [])
             goutputs = tile_data.get("signal_outputs", [])
             out_col = (80, 255, 150) if gout == 1 else (235, 80, 60) if gout == 0 else (150, 150, 150)
@@ -2119,6 +2722,8 @@ class DrawGrid:
                 screen.blit(self.tiny_font.render(
                     f"Signal: {'FULL (1)' if sv==1 else 'NOT FULL (0)'}",
                     True, sv_col), (panel_x+10, y))
+
+        screen.set_clip(None)
 
     def draw_contracts_overlay(self,screen,money):
         pw=620; ph=500; px=(SCREEN_WIDTH-pw)//2; py=(SCREEN_HEIGHT-ph)//2
@@ -2191,7 +2796,7 @@ class DrawGrid:
             locked=self.contracts.get_locked_contracts() if hasattr(self.contracts,"get_locked_contracts") else []
             if locked:
                 gate=self.contracts.unlocked_tier()
-                hdr=self.small_font.render(f"LOCKED — complete Tier {gate} to unlock:",True,(150,120,70))
+                hdr=self.small_font.render(f"LOCKED - complete Tier {gate} to unlock:",True,(150,120,70))
                 screen.blit(hdr,(px+18,y_+4)); y_+=26
                 for contract in locked:
                     cr_=pygame.Rect(px+12,y_,pw-24,44)
@@ -2449,7 +3054,7 @@ class DrawGrid:
             bc_    = BCOLS.get(tech.get("branch","production"), (50,200,70))
 
             if dimmed:
-                bg4=(4,6,4); brd4=(9,14,9)
+                bg4=(7,11,7); brd4=(20,38,22)
             elif done_:
                 bg4=(8,20,8); brd4=tuple(min(255,c//3+16) for c in bc_)
             elif rmets_ and afford_:
@@ -2475,8 +3080,21 @@ class DrawGrid:
             if nw < 34: continue
 
             if dimmed:
-                if nw >= 52:
-                    ab_=fn_tiny.render(tech["name"][:4],True,(18,30,18))
+                # hovering ANY node used to black out the whole rest of the tree
+                # down to 4 chars at (18,30,18) = basically invisible. people
+                # genuinely thought RS2/RS3 werent in the tree
+                # keep the dimming, just make it readable
+                if nw >= 65:
+                    dn_=tech["name"]
+                    maxcw=max(6,(nw-14)//7)
+                    if len(dn_)>maxcw: dn_=dn_[:maxcw-1]+"..."
+                    dcol=(46,104,52) if tid in self.research.researched else (40,86,44)
+                    screen.blit(fn_name.render(dn_,True,dcol),(r.x+max(7,int(7*zoom)), r.y+3))
+                    if nw >= 108:
+                        screen.blit(fn_tiny.render(f"{tech['cost']} RP",True,(32,70,36)),
+                                    (r.x+max(7,int(7*zoom)), r.y+20))
+                elif nw >= 52:
+                    ab_=fn_tiny.render(tech["name"][:4],True,(38,78,42))
                     screen.blit(ab_,ab_.get_rect(center=r.center))
                 continue
 
@@ -2496,7 +3114,7 @@ class DrawGrid:
             if nw >= 65:
                 ns_=tech["name"]
                 maxcw=max(6,(nw-txp+r.x-ts2.get_width()-8)//7)
-                if len(ns_)>maxcw: ns_=ns_[:maxcw-1]+"…"
+                if len(ns_)>maxcw: ns_=ns_[:maxcw-1]+"..."
                 screen.blit(fn_name.render(ns_,True,nc_),(txp, r.y+3))
 
             if nw < 108: continue
@@ -2504,7 +3122,7 @@ class DrawGrid:
             ul_=", ".join(MACHINE_STATS.get(m,{}).get("name","?") for m in tech.get("unlocks",[]))
             if ul_:
                 muc=max(8,(nw-txp+r.x-4)//6)
-                if len(ul_)>muc: ul_=ul_[:muc-1]+"…"
+                if len(ul_)>muc: ul_=ul_[:muc-1]+"..."
                 screen.blit(fn_small.render(ul_,True,(22,105,58)),(txp, r.y+18))
 
             if self.research_tab != "all":
@@ -2516,7 +3134,7 @@ class DrawGrid:
                     cb_x=txp; cb_y=r.bottom-12
                     for cname,cbranch in cross_[:2]:
                         cbc_=BCOLS.get(cbranch,(80,80,80))
-                        clbl=f"{BLAB.get(cbranch,'?')} ← {cname[:10]}"
+                        clbl=f"{BLAB.get(cbranch,'?')} <- {cname[:10]}"
                         cs_=fn_tiny.render(clbl,True,tuple(max(30,c//2+30) for c in cbc_))
                         screen.blit(cs_,(cb_x,cb_y)); cb_y-=10
 
@@ -2524,11 +3142,11 @@ class DrawGrid:
 
             sy3=r.y+35
             if done_:
-                screen.blit(fn_small.render("✓ DONE",True,(33,160,40)),(txp,sy3))
+                screen.blit(fn_small.render("DONE",True,(33,160,40)),(txp,sy3))
             elif rmets_:
                 rp_c=(50,202,50) if afford_ else (25,85,25)
                 screen.blit(fn_small.render(f"{tech['cost']} RP",True,rp_c),(txp,sy3))
-                if afford_ and nw >= 150:
+                if afford_ and nw >= 96:
                     bh_=max(14,int(16*zoom))
                     btn=pygame.Rect(r.x+3,r.bottom-bh_-2,r.w-6,bh_)
                     pygame.draw.rect(screen,(12,50,12) if not hov_ else (20,70,20),btn,border_radius=3)
@@ -2543,8 +3161,8 @@ class DrawGrid:
                 missing=[next((tt2["name"] for tt2 in TECH_TREE if tt2["id"]==rq2),rq2)
                          for rq2 in tech.get("requires",[]) if rq2 not in self.research.researched]
                 if missing:
-                    ms_="← "+", ".join(missing[:2])
-                    if len(ms_)>22: ms_=ms_[:21]+"…"
+                    ms_="<- "+", ".join(missing[:2])
+                    if len(ms_)>22: ms_=ms_[:21]+"..."
                     screen.blit(fn_tiny.render(ms_,True,(17,38,17)),(txp,sy3))
                 else:
                     screen.blit(fn_small.render("LOCKED",True,(17,38,17)),(txp,sy3))
@@ -2652,6 +3270,17 @@ class DrawGrid:
                 self.console_message=f"Unknown: '{code}'"; self.console_message_color=(255,100,100); self.console_message_timer=2.0
         return result
 
+    # wasd are camera keys and letters, so the camera backs off while a box has
+    # focus. searching "sand" used to drag the view across the map.
+    # add any new text field to this list
+    def text_input_active(self):
+        return bool(getattr(self, "bp_importing", False)
+                    or getattr(self, "build_searching", False)
+                    or getattr(self, "market_searching", False)
+                    or getattr(self, "rb_search_focused", False)
+                    or getattr(self, "bp_naming", False)
+                    or getattr(self, "show_code_console", False))
+
     def handle_click(self,pos):
         if self.show_recipe_book:
             if self.rb_search_rect and self.rb_search_rect.collidepoint(pos): self.rb_search_focused=True; return True
@@ -2665,6 +3294,73 @@ class DrawGrid:
             if self.stats_close_rect and self.stats_close_rect.collidepoint(pos): self.show_stats_panel=False; return True
             if hasattr(self,'_stats_panel_rect') and self._stats_panel_rect and self._stats_panel_rect.collidepoint(pos): return True
             self.show_stats_panel=False; return True
+        if self.show_blueprint_panel:
+            if self.bp_close_rect and self.bp_close_rect.collidepoint(pos):
+                self.show_blueprint_panel=False; self.bp_naming=False; return True
+            if self.bp_panel_rect and self.bp_panel_rect.collidepoint(pos):
+                if self.bp_save_rect and self.bp_save_rect.collidepoint(pos):
+                    if self.blueprint:
+                        self.bp_naming=True; self.bp_name_input=""
+                        self.bp_importing=False; self.bp_export_text=""
+                    return True
+                if self.bp_copy_rect and self.bp_copy_rect.collidepoint(pos):
+                    ok = _clipboard_put(self.bp_export_text)
+                    self.bp_message = ("Copied to clipboard" if ok else
+                                       "Clipboard unavailable - the string is saved in "
+                                       "data/blueprint_strings/")
+                    self.bp_message_col = (140,225,180) if ok else (235,190,110)
+                    return True
+                if self.bp_export_rect and self.bp_export_rect.collidepoint(pos):
+                    if (self.bp_lib_selected is not None
+                            and self.bp_lib_selected < len(self.bp_lib.blueprints)):
+                        self.bp_export_text = self.bp_lib.export_string(self.bp_lib_selected) or ""
+                        bp_ = self.bp_lib.blueprints[self.bp_lib_selected]
+                        path = _write_blueprint_string(bp_["name"], self.bp_export_text)
+                        _clipboard_put(self.bp_export_text)
+                        self.bp_naming = False; self.bp_importing = False
+                        self.bp_message = f"Exported to clipboard and {path}"
+                        self.bp_message_col = (140,225,180)
+                    return True
+                if self.bp_import_rect and self.bp_import_rect.collidepoint(pos):
+                    if self.bp_export_text:
+                        self.bp_export_text = ""       # the CLOSE affordance
+                        self.bp_message = ""
+                    else:
+                        self.bp_importing = True
+                        self.bp_naming = False
+                        self.bp_import_input = _clipboard_get() or ""
+                        self.bp_message = ("Pasted from clipboard - press ENTER"
+                                           if self.bp_import_input else
+                                           "Paste a blueprint string, then press ENTER")
+                        self.bp_message_col = (150,205,245)
+                    return True
+                if (self.bp_place_rect and self.bp_place_rect.collidepoint(pos)
+                        and self.bp_lib_selected is not None
+                        and self.bp_lib_selected < len(self.bp_lib.blueprints)):
+                    bp = self.bp_lib.blueprints[self.bp_lib_selected]
+                    from blueprints import _copy_machine
+                    self.blueprint = {"w": bp["w"], "h": bp["h"],
+                                      "machines": [_copy_machine(m) for m in bp["machines"]]}
+                    self.bp_paste_mode=True; self.bp_select_mode=False
+                    self.show_blueprint_panel=False; self.bp_naming=False
+                    self.active_tool=-1
+                    self.show_transaction_message(
+                        f"Placing '{bp['name']}' - click to paste, [ESC] cancel", (120,200,255))
+                    return True
+                if (self.bp_delete_rect and self.bp_delete_rect.collidepoint(pos)
+                        and self.bp_lib_selected is not None
+                        and self.bp_lib_selected < len(self.bp_lib.blueprints)):
+                    removed = self.bp_lib.delete(self.bp_lib_selected)
+                    self.bp_lib_selected=None
+                    if removed:
+                        self.show_transaction_message(f"Deleted '{removed['name']}'", (255,150,80))
+                    return True
+                for idx, r in self.bp_row_rects.items():
+                    if r.collidepoint(pos):
+                        self.bp_lib_selected = None if self.bp_lib_selected == idx else idx
+                        return True
+                return True
+            self.show_blueprint_panel=False; self.bp_naming=False; return True
         if self.show_research_panel:
             if not (hasattr(self,"research_panel_rect") and self.research_panel_rect.collidepoint(pos)):
                 self.show_research_panel=False; return True
@@ -2766,6 +3462,10 @@ class DrawGrid:
                     if not self.show_market_panel:
                         self.market_searching=False; self.market_search=""; self.market_scroll=0
                     self.show_build_panel=self.show_contracts_panel=self.show_research_panel=self.show_stats_panel=False
+                elif key=="V":
+                    self.show_blueprint_panel=not self.show_blueprint_panel
+                    self.bp_naming=False
+                    self.show_build_panel=self.show_contracts_panel=self.show_research_panel=self.show_stats_panel=False
                 elif key=="P": self._power_toggle_requested=True
                 elif key=="X": self.active_tool=-1 if self.active_tool==0 else 0
                 elif key=="Z": self.debug_mode=not self.debug_mode
@@ -2784,6 +3484,9 @@ class DrawGrid:
             self.rb_grid_scroll=max(0,self.rb_grid_scroll-direction*amt); return
         if self.show_stats_panel:
             self.stats_scroll=max(0,self.stats_scroll-direction*amt); return
+        if self.show_blueprint_panel:
+            self.bp_lib_scroll=max(0,min(self.bp_lib_scroll-direction*amt,
+                                         getattr(self,"bp_lib_max_scroll",0))); return
         if self.show_contracts_panel and mouse_pos and hasattr(self,"contracts_panel_rect"):
             if self.contracts_panel_rect.collidepoint(mouse_pos):
                 self.contract_scroll_offset=max(0,min(self.contract_scroll_offset-direction*amt,self.contract_max_scroll)); return
@@ -2845,13 +3548,13 @@ class DrawGrid:
         big   = pygame.font.SysFont(fo, 18, bold=True)
         small = pygame.font.SysFont(fo, 13, bold=False)
 
-        title = big.render("  PROTESTERS BLOCKING TRUCKS", True,
+        title = big.render("PROTESTERS BLOCKING TRUCKS", True,
                            (255, int(100 * pulse), int(80 * pulse)))
         screen.blit(title, (bx + 44, by + 10))
 
         rem = pm.get_remaining_str()
         msg1 = small.render(
-            f"Trucks cannot sell until protesters disperse  —  auto-dispersal in {rem}",
+            f"Trucks cannot sell until protesters disperse  -  auto-dispersal in {rem}",
             True, (245, 160, 140))
         msg2 = small.render(
             "Fix: build Scrubbers to reduce pollution below 200, or take a Loan [L] to buy them.",
@@ -2906,7 +3609,7 @@ class DrawGrid:
         self.market_close_rect = pygame.Rect(cx, cy, 20, 18)
         pygame.draw.rect(screen, (55, 18, 18), self.market_close_rect, border_radius=3)
         pygame.draw.rect(screen, (130, 40, 40), self.market_close_rect, 1, border_radius=3)
-        xs = tiny_f.render("✕", True, (200, 70, 70))
+        xs = tiny_f.render("X", True, (200, 70, 70))
         screen.blit(xs, (cx + 5, cy + 3))
 
         SB_Y = py + 40
@@ -2989,7 +3692,7 @@ class DrawGrid:
             screen.blit(row_f.render(name[:30],          True, name_col), (COL_ITEM, ry + 3))
             screen.blit(row_f.render(f"${base:,.2f}",    True, AMBER_DIM),       (COL_BASE, ry + 3))
             screen.blit(row_f.render(f"${live:,.2f}",    True, col),             (COL_LIVE, ry + 3))
-            arrow = "▲" if pct > 0.05 else ("▼" if pct < -0.05 else "—")
+            arrow = "^" if pct > 0.05 else ("v" if pct < -0.05 else "-")
             screen.blit(row_f.render(f"{arrow} {abs(pct):.1f}%", True, col),     (COL_CHG,  ry + 3))
 
         screen.set_clip(None)
@@ -3058,7 +3761,7 @@ class DrawGrid:
 
         pygame.draw.line(screen, (40, 55, 42), (px + 8, LIST_BOT + 2), (px + PW - 8, LIST_BOT + 2), 1)
         n = len(all_items)
-        suffix = f"  —  {n} matching '{query}'" if query else f"  —  {n} items"
+        suffix = f"  -  {n} matching '{query}'" if query else f"  -  {n} items"
         hint = "click row for detail" if not self.market_selected_item else "click row again to deselect"
-        foot_s = tiny_f.render(f"±8%/hr{suffix}  |  {hint}  |  [M] close", True, AMBER_DIM)
+        foot_s = tiny_f.render(f"+/-8%/hr{suffix}  |  {hint}  |  [M] close", True, AMBER_DIM)
         screen.blit(foot_s, (px + PW // 2 - foot_s.get_width() // 2, LIST_BOT + 9))

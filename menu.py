@@ -1,5 +1,7 @@
 import pygame, os, math, time, random, json, shutil, platform, getpass
 
+from settings import GAME_VERSION, GAME_BUILD
+
 
 
 def _gather_sys_info():
@@ -119,7 +121,7 @@ def _build_boot_lines():
         display_line = "Display: detected"
 
     return [
-        ("",         f"Industrial Capitalist v6.0 (BETA)  -  build 1024A", AMBER_HOT, 0.30),
+        ("",         f"Industrial Capitalist v{GAME_VERSION}  -  build {GAME_BUILD}", AMBER_HOT, 0.30),
         ("",         f"(c) 2026 Anthracite Industries.  All rights reserved.", AMBER_DIM, 0.18),
         ("",         "", AMBER, 0.08),
         ("",         f"Host: {user}@{host}", AMBER, 0.08),
@@ -162,10 +164,8 @@ AMBER       = (255, 176, 60)
 AMBER_HOT   = (255, 215, 130)
 AMBER_DIM   = (180, 110, 30)
 AMBER_LOW   = (110, 65, 18)
-AMBER_FAINT = (60, 35, 10)
 GREEN_OK    = (110, 240, 130)
 GREEN_DIM   = (50, 130, 60)
-RED_ERR     = (255, 70, 60)
 RED_HOT     = (255, 130, 120)
 RED_DIM     = (140, 30, 30)
 WHITE       = (240, 240, 230)
@@ -324,14 +324,6 @@ def _get_menu_crt(W, H):
         _menu_crt_surf = s
         _menu_crt_size = (W, H)
     return _menu_crt_surf
-
-
-def _apply_crt(scr, W, H):
-    tint = pygame.Surface((W, H), pygame.SRCALPHA)
-    tint.fill((8, 20, 6, 10))
-    scr.blit(tint, (0, 0))
-    scr.blit(_get_menu_crt(W, H), (0, 0))
-
 
 def _clear_terminal(scr, W, H, elapsed, dt):
     global _flicker_t, _flicker_amount
@@ -587,7 +579,7 @@ def run_main_menu(scr, clk):
 
         _clear_terminal(scr, W, H, elapsed, dt)
 
-        status = f"{_shell_prompt()} ./industrial_capitalist --version 6.0(BETA)"
+        status = f"{_shell_prompt()} ./industrial_capitalist --version {GAME_VERSION}"
         _term_text(scr, f_tiny, status, 20, 14, AMBER_DIM)
         t_str = time.strftime("%H:%M:%S")
         ts = f_tiny.render(t_str, True, AMBER_DIM)
@@ -652,7 +644,7 @@ def run_main_menu(scr, clk):
         ts_ = f_tiny.render(hint_str, True, AMBER_LOW)
         scr.blit(ts_, (prompt_x, hint_y))
 
-        _term_text(scr, f_small, "V6.0 (BETA)", 20, H - 36, AMBER_DIM)
+        _term_text(scr, f_small, f"V{GAME_VERSION}", 20, H - 36, AMBER_DIM)
 
         if transition_out > 0:
             overlay = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -759,7 +751,7 @@ def run_quit_panic(scr, clk):
         if phase >= 1:
             blink = _blink(elapsed, 4)
             bt_col = RED_HOT if blink else WHITE
-            bs = f_termb.render("*** SYSTEM FAULT — ABNORMAL TERMINATION REQUESTED ***",
+            bs = f_termb.render("*** SYSTEM FAULT - ABNORMAL TERMINATION REQUESTED ***",
                                 True, bt_col)
             temp.blit(bs, (W // 2 - bs.get_width() // 2, 20))
 
@@ -1049,7 +1041,7 @@ def run_save_select(scr, clk):
                 _term_text(scr, f_termb, "[ + new ]", W - 130, ry + 14, plus_col)
             else:
                 co = info.get("company", "UNNAMED CO.").upper()
-                if len(co) > 24: co = co[:23] + "…"
+                if len(co) > 24: co = co[:23] + "..."
                 _term_text(scr, f_term, co, 110, ry + 14, row_col)
 
                 ms_v = f"${info['money']:,.0f}" if isinstance(info['money'], (int, float)) else "$0"
@@ -1088,7 +1080,7 @@ def run_save_select(scr, clk):
             scr.blit(ov, (0, 0))
 
             cy = H // 2 - 50
-            warn = "!!! WARNING — destructive operation !!!"
+            warn = "!!! WARNING - destructive operation !!!"
             ws = f_termb.render(warn, True, RED_HOT if _blink(elapsed, 3) else AMBER_HOT)
             scr.blit(ws, (W // 2 - ws.get_width() // 2, cy))
 
@@ -1118,7 +1110,7 @@ def run_save_select(scr, clk):
 
 STORY_PAGES = [
     {"header": "/var/log/personal/chapter_01.txt", "title": "SIX MONTHS AGO",
-     "lines": ["You were a production engineer at MegaCorp Industries —",
+     "lines": ["You were a production engineer at MegaCorp Industries -",
                "the largest manufacturer in the region.", "",
                "The factory floors were inefficient.",
                "Outdated machines choked out pollution.",
@@ -1151,7 +1143,7 @@ STORY_PAGES = [
     {"header": "/etc/motd", "title": "YOUR MISSION",
      "lines": ["Build your factory from nothing.",
                "Design efficient production chains.",
-               "Keep pollution under control — or pay the price.", "",
+               "Keep pollution under control - or pay the price.", "",
                "And one day, surpass MegaCorp's valuation entirely.", "",
                "Welcome to Industrial Capitalist."]},
 ]
@@ -1295,7 +1287,7 @@ def run_story_intro(scr, clk):
 
 
 PLAY_LOAD_LINES = [
-    ("[  OK  ]", "Spinning up factory simulation .... v6.0(BETA)", GREEN_OK, 0.06),
+    ("[  OK  ]", f"Spinning up factory simulation .... v{GAME_VERSION}", GREEN_OK, 0.06),
     ("[  OK  ]", "Loading world chunks .............. READY", GREEN_OK, 0.06),
     ("[  OK  ]", "Initializing economy model ........ READY", GREEN_OK, 0.06),
     ("[  OK  ]", "Loading save slot manager ......... OK", GREEN_OK, 0.06),
@@ -1430,22 +1422,40 @@ def run_menu(scr, clk):
 
 
 
+from settings import MACHINE_STATS as _MS, ITEM_VALUES as _IV
+
+
+def _cost(mid):
+    """read prices off MACHINE_STATS instead of typing them in by hand.
+    the hardcoded ones had all gone stale - said coal drill $50 (its $150) and
+    van depot $100 (its $500). no wonder people ran out of money"""
+    return f"${_MS.get(mid, {}).get('cost', 0):,.0f}"
+
+
+def _val(item):
+    return f"${_IV.get(item, 0):,.2f}"
+
+
+_RS1_POWER = _MS.get(13, {}).get("power_input", 0)
+_SOLAR_OUT = _MS.get(11, {}).get("power_output", 1) or 1
+_SOLAR_FOR_RS1 = int(-(-_RS1_POWER // _SOLAR_OUT))   # ceil
+
 TUTORIAL_STEPS = [
-    {"title": "WELCOME", "lines": ["So you just bought a plot of land.", "Time to build something on it.", "", "This tutorial will walk you through", "the basics step by step.", "Click NEXT when you're ready."]},
+    {"title": "WELCOME", "lines": ["So you just bought a plot of land.", "It is completely empty - everything", "you see later, you build yourself.", "", "This tutorial walks you through", "the basics step by step.", "Click NEXT when you're ready."]},
     {"title": "MOVING AROUND", "lines": ["Use WASD to move the camera around.", "Scroll wheel zooms in and out.", "", "Try moving around a bit to see", "your empty plot of land."]},
-    {"title": "YOUR FIRST MACHINE", "lines": ["Open Build (B) > Extractors tab.", "Click on 'Coal Drill' ($50).", "Then press T to place it somewhere.", "", "Coal Drills dig up coal.", "But it needs power to run!"]},
-    {"title": "POWERING UP", "lines": ["Open Build (B) > Power tab.", "Place a Solar Panel ($120) near the drill.", "", "Machines need power from nearby generators.", "Keep them within ~5 tiles."]},
-    {"title": "POWER WIRING", "lines": ["Press P to enter POWER MODE.", "", "Click on the power source (solar panel).", "Then click on a machine (the drill).", "This makes a direct power connection.", "", "Press P again to exit power mode."]},
-    {"title": "SELLING COAL", "lines": ["Now your drill is making coal but", "you need somewhere to sell it.", "", "Build (B) > Storage > Van Depot ($100).", "Place it adjacent to the drill output", "(visible by pressing Z).", "", "When the depot fills, a truck comes", "and sells everything automatically."]},
-    {"title": "MAKING MONEY", "lines": ["Coal sells for $5.22 each.", "Not bad for a start!", "", "Your money is shown at the top left."]},
-    {"title": "PROCESSING", "lines": ["Raw stuff is worth way more processed:", "", "  raw_iron ($5) -> furnace -> liquid_iron", "  -> ingot molder -> iron_ingot ($65!)", "", "13x more money per iron."]},
+    {"title": "YOUR FIRST MACHINE", "lines": ["Open Build (B) and search 'Coal Drill'", f"under Extractors ({_cost(2)}).", "Then press T and click a tile to place it.", "", "Coal Drills dig up coal.", "But they need power to run!"]},
+    {"title": "POWERING UP", "lines": ["Open Build (B) > Power.", f"Place a Solar Panel ({_cost(11)}) near the drill.", "", f"One panel makes {_SOLAR_OUT:,.0f} ME/s;", f"a Coal Drill draws {_MS.get(2, {}).get('power_input', 0):,.0f} ME/s.", "", "A panel only reaches 3 tiles, so keep", "generators close to what they feed."]},
+    {"title": "POWER WIRING", "lines": ["Press P to enter POWER MODE.", "", "Click on the power source (solar panel).", "Then click on a machine (the drill).", "This makes a direct power connection.", "", "Nothing is powered until it is wired.", "Press P again to exit power mode."]},
+    {"title": "SELLING COAL", "lines": ["Now your drill is making coal but", "you need somewhere to sell it.", "", f"Build (B) > Storage > Van Depot ({_cost(3)}).", "The drill pushes coal DOWNWARDS, so the", "depot goes directly BELOW the drill.", "Press Z to see every input/output tile.", "", "When the depot is half full a truck", "comes and sells everything."]},
+    {"title": "MAKING MONEY", "lines": [f"Coal is worth {_val('coal')}, and the Van Depot", f"pays {_MS.get(3, {}).get('sell_bonus', 1.0):.2f}x that on collection.", "", "Your money is shown at the top left.", "Contracts [C] pay out on top of sales."]},
+    {"title": "PROCESSING", "lines": ["Raw material is worth far more once", "it has been processed:", "", f"  raw_iron {_val('raw_iron')} -> Furnace -> liquid_iron", f"  -> Ingot Molder -> iron_ingot {_val('iron_ingot')}", "", "Longer chains, bigger margins."]},
     {"title": "RECIPE BOOK", "lines": ["Press K to open the Recipe Book.", "Every item in the game is listed here.", "", "Click any item to see:", "  - Sell value and RP value", "  - What machines produce it", "  - What recipes use it as input"]},
-    {"title": "DELETING", "lines": ["Press X to enter DELETE MODE.", "", "Click a machine to remove it.", "You get 80% of the cost back.", "", "Drag to select multiple at once.", "Press Y to confirm, N to cancel."]},
-    {"title": "RESEARCH", "lines": ["You start with a Research Station 1.", "It's $75 in the Utility build tab.", "", "Power it and it generates RP", "(Research Points) over time.", "", "Open the tech tree to spend RP."]},
-    {"title": "POLLUTION", "lines": ["Drills and generators produce pollution.", "Check the meter at the top left.", "", "High pollution cuts profits via taxes.", "Research the Scrubber to clean the air."]},
-    {"title": "MACHINE MODES", "lines": ["Click a placed machine to see its panel.", "If it has modes, click to switch recipes.", "", "Example: Craft Assembler can make", "concrete, crankshafts, chairs, and more."]},
-    {"title": "CONTRACTS", "lines": ["Press C to open Contracts.", "Goals that reward money and RP.", "", "Start with 'First Steps' — sell 20 coal."]},
-    {"title": "GOOD LUCK", "lines": ["You know enough to get going now.", "", "Quick reference:", "  B=Build  K=Recipes  C=Contracts", "  P=Power  X=Delete   R=Rotate", "  T=Place  WASD=Move  Scroll=Zoom", "", "Good luck out there!"]},
+    {"title": "DELETING", "lines": ["Press X to enter DELETE MODE.", "", "Click a machine to remove it.", "You get 80% of the cost back.", "Delete mode turns off after one click -", "hold SHIFT to keep deleting.", "", "Drag over empty ground to box-select,", "then Y to confirm, N to cancel."]},
+    {"title": "RESEARCH", "lines": [f"A Research Station 1 costs {_cost(13)} in the", "Utility build tab. You start with none.", "", f"It draws {_RS1_POWER:,.0f} ME/s - about", f"{_SOLAR_FOR_RS1} solar panels - so sell coal first", "and build the power before the station.", "", "Once powered it makes RP. Spend RP in", "the tech tree [T]. Coal Generator is the", "cheap early unlock that fixes power."]},
+    {"title": "POLLUTION", "lines": ["Drills and generators produce pollution.", "Check the meter at the top left.", "", "High pollution cuts your income and", "eventually triggers protests.", "", "Research Atmospherics for the Exhaust", "Stack (passive, no power) and the", "Scrubber (stronger, needs power).", "The Stats panel [N] shows the balance."]},
+    {"title": "MACHINE MODES", "lines": ["Click a placed machine to see its panel.", "If it has modes, click to switch recipes.", "", "Example: Craft Assembler can make", "crankshafts, chairs, tires, and more.", "The panel lists what each mode needs."]},
+    {"title": "CONTRACTS", "lines": ["Press C to open Contracts.", "Goals that reward money and RP.", "", "Start with 'First Steps' - sell 20 coal."]},
+    {"title": "GOOD LUCK", "lines": ["You know enough to get going now.", "", "Quick reference:", "  B=Build  K=Recipes  C=Contracts", "  P=Power  X=Delete   R=Rotate", "  T=Place  WASD=Move  Scroll=Zoom", "  Z=Ports  N=Stats    V=Blueprints", "", "Good luck out there!"]},
 ]
 
 
